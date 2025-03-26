@@ -2,6 +2,7 @@ import os
 import logging
 import time
 import asyncio
+import sys
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 import yt_dlp
@@ -9,6 +10,9 @@ import yt_dlp
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO,
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ]
 )
 logger = logging.getLogger(__name__)
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -16,8 +20,10 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
 def download_video(url: str, user_id: int) -> str:
+    logger.info(f"Начало загрузки видео: {url} для пользователя {user_id}")
     timestamp = int(time.time())
     output_dir = "downloads"
+    logger.debug(f"Создание директории для загрузок: {output_dir}")
     os.makedirs(output_dir, exist_ok=True)
     
     ydl_opts = {
@@ -43,6 +49,7 @@ def download_video(url: str, user_id: int) -> str:
             for ext in possible_exts:
                 real_file = f"{base_name}{ext}"
                 if os.path.exists(real_file):
+                    logger.info(f"Видео успешно загружено: {real_file}")
                     return real_file
             
             if os.path.exists(prepared_filename):
@@ -54,11 +61,13 @@ def download_video(url: str, user_id: int) -> str:
         raise
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.info(f"Пользователь {update.effective_user.id} отправил команду /start")
     await update.message.reply_text("Отправь ссылку на видео из X.com")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text
     user_id = update.effective_user.id
+    logger.info(f"Пользователь {user_id} отправил сообщение: {url}")
     
     try:
         await update.message.reply_text("Начинаю загрузку...")
@@ -72,9 +81,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
         os.remove(filepath)
     except Exception as e:
+        logger.error(f"Ошибка при обработке сообщения: {e}")
         await update.message.reply_text(f"Ошибка: {str(e)}")
 
 def main():
+    logger.info("Запуск Telegram-бота")
     application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
