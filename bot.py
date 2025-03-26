@@ -36,7 +36,6 @@ def download_video(url: str, user_id: int) -> str:
             info = ydl.extract_info(url, download=True)
             prepared_filename = ydl.prepare_filename(info)
             
-            # Находим реальный файл
             base_name = os.path.splitext(prepared_filename)[0]
             possible_exts = ['.mp4', '.mkv', '.mov', '.avi']
             
@@ -45,7 +44,6 @@ def download_video(url: str, user_id: int) -> str:
                 if os.path.exists(real_file):
                     return real_file
             
-            # Если не найдено - пробуем оригинальное имя
             if os.path.exists(prepared_filename):
                 return prepared_filename
             
@@ -54,7 +52,6 @@ def download_video(url: str, user_id: int) -> str:
         logger.error(f"Ошибка: {e}")
         raise
 
-# Обработчики остаются без изменений
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Отправь ссылку на видео из X.com")
 
