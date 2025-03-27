@@ -31,8 +31,8 @@ ydl_opts = {
     'format': 'best',
     "quiet": True,
     'noplaylist': True,
-    'merge_output_format': None,  
-}
+    'merge_output_format': None,  # Отключает необходимость объединения
+    }
     
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
