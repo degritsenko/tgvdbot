@@ -39,7 +39,7 @@ def download_video(url: str, user_id: int) -> str:
         }
     }
 
-try:
+    try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
             prepared_filename = ydl.prepare_filename(info)
