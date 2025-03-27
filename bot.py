@@ -31,10 +31,10 @@ ydl_opts = {
     'format': 'best',
     "quiet": True,
     'noplaylist': True,
-    'merge_output_format': None,  # Отключает необходимость объединения
-    }
-    
-    try:
+    'merge_output_format': None,  
+}
+
+try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
             prepared_filename = ydl.prepare_filename(info)
