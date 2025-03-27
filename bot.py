@@ -26,12 +26,13 @@ def download_video(url: str, user_id: int) -> str:
     logger.debug(f"Создание директории для загрузок: {output_dir}")
     os.makedirs(output_dir, exist_ok=True)
     
-    ydl_opts = {
-        'outtmpl': f"{output_dir}/video_{user_id}_{timestamp}.%(ext)s",
-        'format': 'bestvideo+bestaudio/best',
-        "quiet": True,
-        'noplaylist': True,
-    }
+ydl_opts = {
+    'outtmpl': f"{output_dir}/video_{user_id}_{timestamp}.%(ext)s",
+    'format': 'best',
+    "quiet": True,
+    'noplaylist': True,
+    'merge_output_format': None,  
+}
     
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
