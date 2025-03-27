@@ -28,8 +28,8 @@ COPY --from=builder /install /usr/local
 COPY bot.py .
 
 # Удаляем лишние файлы
-#RUN find /usr/local/lib/python3.13 -name '__pycache__' -exec rm -rf {} + \
-#    && find /usr/local/lib/python3.13 -name '*.pyc' -exec rm -f {} + \
-#    && rm -rf /root/.cache
+RUN find /usr/local/lib/python3.13 -name '__pycache__' -exec rm -rf {} + \
+    && find /usr/local/lib/python3.13 -name '*.pyc' -exec rm -f {} + \
+    && rm -rf /root/.cache
 
 CMD ["python", "bot.py"]
