@@ -12,13 +12,10 @@ RUN apk add --no-cache --virtual .build-deps \
     && apk del .build-deps
 
 # Финальный образ
-FROM alpine:3.21
+FROM python:3.13.2-alpine3.21
 
 # Устанавливаем только необходимые runtime зависимости
-RUN apk add --no-cache \
-    python3 \
-    py3-pip \
-    ffmpeg \
+RUN apk add --no-cache ffmpeg \
     && rm -rf /var/cache/apk/*
 
 WORKDIR /app
@@ -27,7 +24,7 @@ WORKDIR /app
 COPY --from=builder /install /usr/local
 COPY bot.py .
 
-# Удаляем лишние файлы
+# Очистка лишних файлов
 RUN find /usr/local/lib/python3.13 -name '__pycache__' -exec rm -rf {} + \
     && find /usr/local/lib/python3.13 -name '*.pyc' -exec rm -f {} + \
     && rm -rf /root/.cache
