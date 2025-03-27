@@ -2,9 +2,9 @@ FROM python:3.13.2-alpine3.21
 
 WORKDIR /app
 
-#RUN apk add --no-cache \
-#    ffmpeg \
-#    && rm -rf /var/cache/apk/*
+RUN apk add --no-cache \
+    ffmpeg \
+    && rm -rf /var/cache/apk/*
 
 COPY requirements.txt .
 
