@@ -30,13 +30,7 @@ def download_video(url: str, user_id: int) -> str:
         'outtmpl': f"{output_dir}/video_{user_id}_{timestamp}.%(ext)s",
         'format': 'bestvideo+bestaudio/best',
         "quiet": True,
-        'merge_output_format': 'mp4',
         'noplaylist': True,
-        'prefer_ffmpeg': True,
-        'ffmpeg_location': '/usr/bin/ffmpeg',
-        'postprocessor_args': {
-            'ffmpeg': ['-c', 'copy']
-        }
     }
     
     try:
