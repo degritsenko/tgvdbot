@@ -1,3 +1,2 @@
-aiogram
 yt-dlp
-python-dotenv
+python-telegram-bot
