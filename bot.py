@@ -1,79 +1,181 @@
 import os
-import asyncio
 import logging
+import time
+import asyncio
+import sys
+import subprocess
+
+from telegram import Update
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    MessageHandler,
+    ContextTypes,
+    filters,
+)
+
 import yt_dlp
-from aiogram import Bot, Dispatcher, types, F
-from aiogram.filters import Command
-from aiogram.types import FSInputFile
-from dotenv import load_dotenv
 
-load_dotenv()
+# =======================
+# LOGGING
+# =======================
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO,
+    handlers=[logging.StreamHandler(sys.stdout)],
+)
+logger = logging.getLogger(__name__)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
+# =======================
+# CONFIG
+# =======================
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-bot = Bot(token=TELEGRAM_BOT_TOKEN)
-dp = Dispatcher()
+MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
+DOWNLOAD_DIR = "downloads"
 
-def download_video(url: str) -> dict:
+# =======================
+# DOWNLOAD
+# =======================
+
+def download_video(url: str, user_id: int) -> str:
+    timestamp = int(time.time())
+    os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+
+    logger.info(f"[user_id={user_id}] Начало загрузки видео: {url}")
+
     ydl_opts = {
-        'format': 'bv*[filesize_approx<50M]/best/best',
-        'outtmpl': 'downloads/%(id)s.%(ext)s',
-        'noplaylist': True,
-        'quiet': True,
+        "outtmpl": f"{DOWNLOAD_DIR}/video_{user_id}_{timestamp}.%(ext)s",
+        "format": "bestvideo+bestaudio/best",
+        "merge_output_format": "mp4",
+        "noplaylist": True,
+        "quiet": True,
+        "prefer_ffmpeg": True,
+        "ffmpeg_location": "/usr/bin/ffmpeg",
     }
+
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=True)
-        path = info.get('_filename') or ydl.prepare_filename(info)
+        filepath = info.get("_filename") or ydl.prepare_filename(info)
 
-        duration = info.get('duration') or 0
-        acodec = info.get('acodec')
-        is_gif = (acodec in (None, 'none')) and duration <= 15
+    if not os.path.exists(filepath):
+        logger.error(f"[user_id={user_id}] Файл не найден после загрузки")
+        raise FileNotFoundError("Файл не найден после загрузки")
 
-        return {
-            'path': path,
-            'title': info.get('title', 'video'),
-            'duration': duration,
-            'is_gif': is_gif,
-        }
+    logger.info(f"[user_id={user_id}] Видео загружено: {filepath}")
+    return filepath
 
-@dp.message(Command("start"))
-async def start(message: types.Message):
-    await message.answer("Пришли ссылку на пост из X (Twitter), и я скачаю видео.")
+# =======================
+# REENCODE
+# =======================
 
-@dp.message(F.text.contains("x.com") | F.text.contains("twitter.com"))
-async def handle_link(message: types.Message):
-    status_msg = await message.answer("⏳ Загружаю видео...")
-    file_path = None
+def recompress_video(input_path: str, user_id: int) -> str:
+    output_path = input_path.replace(".mp4", "_reencoded.mp4")
+
+    logger.info(f"[user_id={user_id}] Перекодирование видео через ffmpeg")
+
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i", input_path,
+        "-vcodec", "libx264",
+        "-preset", "veryfast",
+        "-crf", "28",
+        "-movflags", "+faststart",
+        output_path,
+    ]
+
+    subprocess.run(
+        cmd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+    if not os.path.exists(output_path):
+        logger.error(f"[user_id={user_id}] Ошибка перекодирования")
+        raise RuntimeError("Ошибка перекодирования видео")
+
+    return output_path
+
+# =======================
+# HANDLERS
+# =======================
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    logger.info(f"[user_id={user_id}] Команда /start")
+    await update.message.reply_text(
+        "Отправь ссылку на пост из X.com — я скачаю видео."
+    )
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    url = update.message.text
+
+    logger.info(f"[user_id={user_id}] Получена ссылка: {url}")
+
+    await update.message.reply_text("Загружаю видео...")
+
+    filepath = None
 
     try:
-        data = await asyncio.to_thread(download_video, message.text)
-        file_path = data['path']
+        filepath = await asyncio.to_thread(download_video, url, user_id)
 
-        media = FSInputFile(file_path)
+        size = os.path.getsize(filepath)
+        size_mb = size / (1024 * 1024)
+        logger.info(f"[user_id={user_id}] Размер после загрузки: {size_mb:.1f} MB")
 
-        if data['is_gif']:
-            await message.answer_animation(media)
-        else:
-            await message.answer_video(
-                media,
-                caption=data['title'],
-                duration=data['duration'],
+        if size > MAX_FILE_SIZE:
+            filepath_new = await asyncio.to_thread(
+                recompress_video, filepath, user_id
+            )
+            os.remove(filepath)
+            filepath = filepath_new
+
+            size = os.path.getsize(filepath)
+            size_mb = size / (1024 * 1024)
+            logger.info(
+                f"[user_id={user_id}] Размер после перекодирования: {size_mb:.1f} MB"
             )
 
+        if size > MAX_FILE_SIZE:
+            logger.warning(
+                f"[user_id={user_id}] Файл всё ещё больше лимита Telegram"
+            )
+            raise ValueError("Файл больше 50 МБ")
+
+        with open(filepath, "rb") as video:
+            await update.message.reply_video(video)
+
+        logger.info(f"[user_id={user_id}] Видео успешно отправлено")
+
     except Exception as e:
-        logging.error(f"Error: {e}")
-        await message.answer(
-            "❌ Ошибка загрузки. Видео может быть слишком большим или недоступным."
+        logger.exception(f"[user_id={user_id}] Ошибка обработки видео")
+        await update.message.reply_text(
+            "❌ Не удалось отправить видео (слишком большое или ошибка обработки)."
         )
     finally:
-        await status_msg.delete()
-        if file_path and os.path.exists(file_path):
-            os.remove(file_path)
+        if filepath and os.path.exists(filepath):
+            try:
+                os.remove(filepath)
+                logger.info(f"[user_id={user_id}] Временный файл удалён")
+            except OSError:
+                pass
 
-async def main():
-    os.makedirs('downloads', exist_ok=True)
-    await dp.start_polling(bot)
+# =======================
+# MAIN
+# =======================
+
+def main():
+    logger.info("Запуск Telegram-бота")
+    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+    app.run_polling()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
