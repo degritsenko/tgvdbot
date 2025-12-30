@@ -17,7 +17,7 @@ dp = Dispatcher()
 
 def download_video(url: str) -> dict:
     ydl_opts = {
-        'format': 'bv*[filesize_approx<50M]/best',
+        'format': 'bv*[filesize_approx<50M]/best/best',
         'outtmpl': 'downloads/%(id)s.%(ext)s',
         'noplaylist': True,
         'quiet': True,
