@@ -1,0 +1,12 @@
+version: "3.9"
+
+services:
+  tgvdbot:
+    image: gritsenko/tgvdbot
+    container_name: tgvdbot
+
+    restart: unless-stopped
+
+    environment:
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      TZ: Europe/Moscow
