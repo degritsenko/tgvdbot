@@ -24,7 +24,7 @@ import yt_dlp
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 DOWNLOAD_DIR = os.getenv("DOWNLOAD_DIR", "downloads")
-MAX_FILE_SIZE = int(os.getenv("MAX_FILE_SIZE", str(50 * 1024 * 1024)))  # 50 MB
+MAX_FILE_SIZE = int(os.getenv("MAX_FILE_SIZE", str(50 * 1024 * 1024)))
 MAX_PARALLEL_DOWNLOADS = int(os.getenv("MAX_PARALLEL_DOWNLOADS", "3"))
 RATE_LIMIT_REQUESTS = int(os.getenv("RATE_LIMIT_REQUESTS", "5"))
 RATE_LIMIT_WINDOW = int(os.getenv("RATE_LIMIT_WINDOW", "60"))
@@ -58,8 +58,13 @@ LAST_REQUESTS = defaultdict(list)
 # HELPERS
 # =======================
 
-def is_twitter_url(url: str) -> bool:
-    return "twitter.com" in url or "x.com" in url or "t.co/" in url
+def is_supported_url(url: str) -> bool:
+    return (
+        "twitter.com" in url
+        or "x.com" in url
+        or "t.co/" in url
+        or "instagram.com" in url
+    )
 
 def is_allowed(user_id: int) -> tuple[bool, Optional[int]]:
     now = time.time()
@@ -90,7 +95,8 @@ def download_video(url: str, user_id: int) -> tuple[str, bool]:
     ts = int(time.time())
     outtmpl = f"{DOWNLOAD_DIR}/video_{user_id}_{ts}.%(ext)s"
 
-    logger.info(f"[user={user_id}] download: {url}")
+    platform = "instagram" if "instagram.com" in url else "x"
+    logger.info(f"[user={user_id}] platform={platform} url={url}")
 
     ydl_opts = {
         "outtmpl": outtmpl,
@@ -113,8 +119,8 @@ def download_video(url: str, user_id: int) -> tuple[str, bool]:
     size_mb = os.path.getsize(filepath) / (1024 * 1024)
 
     logger.info(
-        f"[user={user_id}] downloaded {os.path.basename(filepath)} "
-        f"({size_mb:.1f} MB, {'GIF' if is_gif else 'video'})"
+        f"[user={user_id}] downloaded "
+        f"{os.path.basename(filepath)} ({size_mb:.1f} MB)"
     )
 
     return filepath, is_gif
@@ -126,7 +132,6 @@ def download_video(url: str, user_id: int) -> tuple[str, bool]:
 def optimize_video(path: str, user_id: int) -> str:
     size = os.path.getsize(path)
 
-    # Быстрый remux, если близко к лимиту
     if size <= MAX_FILE_SIZE * 0.9:
         return path
 
@@ -143,7 +148,6 @@ def optimize_video(path: str, user_id: int) -> str:
         os.remove(path)
         return remux_path
 
-    # Полное перекодирование
     logger.info(f"[user={user_id}] recompress")
     out = path.replace(".mp4", "_compressed.mp4")
 
@@ -172,20 +176,18 @@ def optimize_video(path: str, user_id: int) -> str:
 # =======================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    logger.info(f"[user={user_id}] /start")
     await update.message.reply_text(
-        "Отправь ссылку на пост из X (Twitter), и я пришлю видео."
+        "Пришли ссылку на X (Twitter) или Instagram Reel — пришлю видео."
     )
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     url = (update.message.text or "").strip()
 
-    logger.info(f"[user={user_id}] url: {url}")
-
-    if not is_twitter_url(url):
-        await update.message.reply_text("Это не ссылка на X.com / Twitter.")
+    if not is_supported_url(url):
+        await update.message.reply_text(
+            "Поддерживаются ссылки на X (Twitter) и Instagram (Reels)."
+        )
         return
 
     allowed, wait = is_allowed(user_id)
@@ -218,9 +220,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_video(f, supports_streaming=True)
 
         await status.delete()
-        logger.info(f"[user={user_id}] sent")
 
-    except Exception as e:
+    except Exception:
         logger.exception(f"[user={user_id}] error")
         await status.edit_text("❌ Не удалось отправить видео.")
 
