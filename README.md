@@ -3,7 +3,11 @@
 ```
 docker build -t tgvdbot .
 
-docker run -d --name tgvdbot \
-  -e TELEGRAM_BOT_TOKEN="your token" \
-  tgvdbot
+docker run -d \
+  --name tgvdbot \
+  --restart unless-stopped \
+  -e TELEGRAM_BOT_TOKEN=XXXX \
+  -e TZ=Europe/Moscow \
+  -v $(pwd)/cookies:/app/cookies:ro \
+  gritsenko/tgvdbot
 ```
