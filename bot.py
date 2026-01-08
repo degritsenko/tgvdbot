@@ -106,14 +106,18 @@ def download_video(url: str, user_id: int) -> tuple[str, bool]:
     logger.info(f"[user={user_id}] platform={platform} url={url}")
 
     ydl_opts = {
-        "outtmpl": outtmpl,
-        "format": "best[height<=720]/best",
-        "merge_output_format": "mp4",
-        "noplaylist": True,
-        "quiet": True,
-        "prefer_ffmpeg": True,
-        "ffmpeg_location": "/usr/bin/ffmpeg",
-    }
+    "outtmpl": outtmpl,
+    "format": "best[height<=720]/best",
+    "merge_output_format": "mp4",
+    "noplaylist": True,
+    "quiet": True,
+    "prefer_ffmpeg": True,
+    "user_agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    ),
+}
 
     # ✅ Instagram cookies (optional, but strongly recommended)
     if platform == "instagram":
@@ -146,13 +150,15 @@ def download_video(url: str, user_id: int) -> tuple[str, bool]:
 
 def optimize_video(path: str, user_id: int) -> str:
     size = os.path.getsize(path)
-
     if size <= MAX_FILE_SIZE * 0.9:
         return path
 
-    # Fast remux
+    # Разделяем путь на имя (base) и расширение (ext)
+    base, ext = os.path.splitext(path)
+
+    # 1. Быстрый remux
     logger.info(f"[user={user_id}] remux")
-    remux_path = path.replace(".mp4", "_opt.mp4")
+    remux_path = f"{base}_opt{ext}" # Было path.replace(".mp4", ...)
 
     subprocess.run(
         ["ffmpeg", "-y", "-i", path, "-c", "copy", "-movflags", "+faststart", remux_path],
@@ -164,9 +170,9 @@ def optimize_video(path: str, user_id: int) -> str:
         os.remove(path)
         return remux_path
 
-    # Full recompress
+    # 2. Полное перекодирование
     logger.info(f"[user={user_id}] recompress")
-    out = path.replace(".mp4", "_compressed.mp4")
+    out = f"{base}_compressed{ext}"
 
     subprocess.run(
         [
