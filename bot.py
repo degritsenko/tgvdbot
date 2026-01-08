@@ -29,6 +29,8 @@ MAX_PARALLEL_DOWNLOADS = int(os.getenv("MAX_PARALLEL_DOWNLOADS", "3"))
 RATE_LIMIT_REQUESTS = int(os.getenv("RATE_LIMIT_REQUESTS", "5"))
 RATE_LIMIT_WINDOW = int(os.getenv("RATE_LIMIT_WINDOW", "60"))
 
+INSTAGRAM_COOKIES = "/app/cookies/instagram.txt"
+
 if not TELEGRAM_BOT_TOKEN:
     raise RuntimeError("TELEGRAM_BOT_TOKEN не задан")
 
@@ -44,8 +46,12 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)],
 )
 logger = logging.getLogger(__name__)
-logging.getLogger("httpx").setLevel(logging.WARNING)
-logging.getLogger("yt_dlp").setLevel(logging.WARNING)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)],
+)
 
 # =======================
 # GLOBALS
@@ -108,6 +114,14 @@ def download_video(url: str, user_id: int) -> tuple[str, bool]:
         "ffmpeg_location": "/usr/bin/ffmpeg",
     }
 
+    # ✅ Instagram cookies (optional, but strongly recommended)
+    if platform == "instagram":
+        if os.path.exists(INSTAGRAM_COOKIES):
+            ydl_opts["cookiefile"] = INSTAGRAM_COOKIES
+            logger.info(f"[user={user_id}] using instagram cookies")
+        else:
+            logger.warning(f"[user={user_id}] instagram cookies not found")
+
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=True)
         filepath = info.get("_filename") or ydl.prepare_filename(info)
@@ -119,8 +133,8 @@ def download_video(url: str, user_id: int) -> tuple[str, bool]:
     size_mb = os.path.getsize(filepath) / (1024 * 1024)
 
     logger.info(
-        f"[user={user_id}] downloaded "
-        f"{os.path.basename(filepath)} ({size_mb:.1f} MB)"
+        f"[user={user_id}] downloaded {os.path.basename(filepath)} "
+        f"({size_mb:.1f} MB, {'GIF' if is_gif else 'video'})"
     )
 
     return filepath, is_gif
@@ -135,6 +149,7 @@ def optimize_video(path: str, user_id: int) -> str:
     if size <= MAX_FILE_SIZE * 0.9:
         return path
 
+    # Fast remux
     logger.info(f"[user={user_id}] remux")
     remux_path = path.replace(".mp4", "_opt.mp4")
 
@@ -148,6 +163,7 @@ def optimize_video(path: str, user_id: int) -> str:
         os.remove(path)
         return remux_path
 
+    # Full recompress
     logger.info(f"[user={user_id}] recompress")
     out = path.replace(".mp4", "_compressed.mp4")
 
@@ -186,7 +202,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not is_supported_url(url):
         await update.message.reply_text(
-            "Поддерживаются ссылки на X (Twitter) и Instagram (Reels)."
+            "Поддерживаются ссылки на X (Twitter) и Instagram Reels."
         )
         return
 
@@ -220,10 +236,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_video(f, supports_streaming=True)
 
         await status.delete()
+        logger.info(f"[user={user_id}] sent")
 
     except Exception:
         logger.exception(f"[user={user_id}] error")
-        await status.edit_text("❌ Не удалось отправить видео.")
+        await status.edit_text(
+            "❌ Не удалось загрузить видео.\n"
+            "Для Instagram: возможно, требуется авторизация."
+        )
 
     finally:
         if filepath and os.path.exists(filepath):

@@ -1,0 +1,9 @@
+# macOS
+.DS_Store
+
+
+# Docker
+.docker/
+
+# Misc
+*.log

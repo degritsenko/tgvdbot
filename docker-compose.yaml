@@ -10,3 +10,5 @@ services:
     environment:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
       TZ: Europe/Moscow
+    volumes:
+      - ./cookies.txt:/app/cookies.txt     
