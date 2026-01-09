@@ -106,18 +106,18 @@ def download_video(url: str, user_id: int) -> tuple[str, bool]:
     logger.info(f"[user={user_id}] platform={platform} url={url}")
 
     ydl_opts = {
-    "outtmpl": outtmpl,
-    "format": "best[height<=720]/best",
-    "merge_output_format": "mp4",
-    "noplaylist": True,
-    "quiet": True,
-    "prefer_ffmpeg": True,
-    "user_agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/120.0.0.0 Safari/537.36"
-    ),
-}
+        "outtmpl": outtmpl,
+        "format": "best[height<=720]/best",
+        "merge_output_format": "mp4",
+        "noplaylist": True,
+        "quiet": True,
+        "prefer_ffmpeg": True,
+        "user_agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/120.0.0.0 Safari/537.36"
+        ),
+    }
 
     # ✅ Instagram cookies (optional, but strongly recommended)
     if platform == "instagram":
@@ -150,27 +150,34 @@ def download_video(url: str, user_id: int) -> tuple[str, bool]:
 
 def optimize_video(path: str, user_id: int) -> str:
     size = os.path.getsize(path)
-    if size <= MAX_FILE_SIZE * 0.9:
+    
+    # Если файл уже подходит по размеру, не трогаем
+    if size <= MAX_FILE_SIZE:
         return path
-
+    
     # Разделяем путь на имя (base) и расширение (ext)
     base, ext = os.path.splitext(path)
 
-    # 1. Быстрый remux
-    logger.info(f"[user={user_id}] remux")
-    remux_path = f"{base}_opt{ext}" # Было path.replace(".mp4", ...)
+    # 1. Быстрый remux — если файл не сильно больше лимита (до 90 МБ)
+    if size <= MAX_FILE_SIZE * 1.8:
+        logger.info(f"[user={user_id}] remux")
+        remux_path = f"{base}_opt{ext}"
 
-    subprocess.run(
-        ["ffmpeg", "-y", "-i", path, "-c", "copy", "-movflags", "+faststart", remux_path],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
+        subprocess.run(
+            ["ffmpeg", "-y", "-i", path, "-c", "copy", "-movflags", "+faststart", remux_path],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
 
-    if os.path.exists(remux_path) and os.path.getsize(remux_path) <= MAX_FILE_SIZE:
-        os.remove(path)
-        return remux_path
+        if os.path.exists(remux_path) and os.path.getsize(remux_path) <= MAX_FILE_SIZE:
+            os.remove(path)
+            return remux_path
+        
+        # Если remux не помог, удаляем временный файл
+        if os.path.exists(remux_path):
+            os.remove(remux_path)
 
-    # 2. Полное перекодирование
+    # 2. Полное перекодирование — если remux не сработал
     logger.info(f"[user={user_id}] recompress")
     out = f"{base}_compressed{ext}"
 
