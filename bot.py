@@ -3,10 +3,10 @@ import sys
 import time
 import asyncio
 import logging
-import subprocess
 from collections import defaultdict
 from typing import Optional
 
+import yt_dlp
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
@@ -16,23 +16,22 @@ from telegram.ext import (
     filters,
 )
 
-import yt_dlp
-
 # =======================
 # CONFIG
 # =======================
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 DOWNLOAD_DIR = os.getenv("DOWNLOAD_DIR", "downloads")
-MAX_FILE_SIZE = int(os.getenv("MAX_FILE_SIZE", str(50 * 1024 * 1024)))
-MAX_PARALLEL_DOWNLOADS = int(os.getenv("MAX_PARALLEL_DOWNLOADS", "3"))
-RATE_LIMIT_REQUESTS = int(os.getenv("RATE_LIMIT_REQUESTS", "5"))
-RATE_LIMIT_WINDOW = int(os.getenv("RATE_LIMIT_WINDOW", "60"))
+MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
+
+RATE_LIMIT_REQUESTS = 5
+RATE_LIMIT_WINDOW = 60  # sec
+MAX_PARALLEL_DOWNLOADS = 3
 
 INSTAGRAM_COOKIES = "/app/cookies/instagram.txt"
 
 if not TELEGRAM_BOT_TOKEN:
-    raise RuntimeError("TELEGRAM_BOT_TOKEN не задан")
+    raise RuntimeError("TELEGRAM_BOT_TOKEN is not set")
 
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
@@ -45,10 +44,8 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
     handlers=[logging.StreamHandler(sys.stdout)],
 )
-
 logger = logging.getLogger(__name__)
 
-# Suppress noisy libraries
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("telegram").setLevel(logging.INFO)
 logging.getLogger("telegram.ext").setLevel(logging.INFO)
@@ -66,33 +63,20 @@ LAST_REQUESTS = defaultdict(list)
 # =======================
 
 def is_supported_url(url: str) -> bool:
-    return (
-        "twitter.com" in url
-        or "x.com" in url
-        or "t.co/" in url
-        or "instagram.com" in url
-    )
+    return any(x in url for x in ("twitter.com", "x.com", "t.co/", "instagram.com"))
 
-def is_allowed(user_id: int) -> tuple[bool, Optional[int]]:
+def rate_limit(user_id: int) -> Optional[int]:
     now = time.time()
-    window = RATE_LIMIT_WINDOW
-
-    LAST_REQUESTS[user_id] = [
-        t for t in LAST_REQUESTS[user_id] if now - t < window
-    ]
+    LAST_REQUESTS[user_id] = [t for t in LAST_REQUESTS[user_id] if now - t < RATE_LIMIT_WINDOW]
 
     if len(LAST_REQUESTS[user_id]) >= RATE_LIMIT_REQUESTS:
-        wait = int(window - (now - LAST_REQUESTS[user_id][0]))
-        return False, max(1, wait)
+        return int(RATE_LIMIT_WINDOW - (now - LAST_REQUESTS[user_id][0]))
 
     LAST_REQUESTS[user_id].append(now)
-    return True, None
+    return None
 
 def detect_gif(info: dict) -> bool:
-    return (
-        info.get("acodec") in (None, "none")
-        and (info.get("duration") or 0) <= 15
-    )
+    return info.get("ext") == "gif"
 
 # =======================
 # DOWNLOAD
@@ -102,8 +86,9 @@ def download_video(url: str, user_id: int) -> tuple[str, bool]:
     ts = int(time.time())
     outtmpl = f"{DOWNLOAD_DIR}/video_{user_id}_{ts}.%(ext)s"
 
-    platform = "instagram" if "instagram.com" in url else "x"
-    logger.info(f"[user={user_id}] platform={platform} url={url}")
+    is_instagram = "instagram.com" in url
+    platform = "instagram" if is_instagram else "x"
+    logger.info(f"[user={user_id}] download start platform={platform} url={url}")
 
     ydl_opts = {
         "outtmpl": outtmpl,
@@ -119,87 +104,21 @@ def download_video(url: str, user_id: int) -> tuple[str, bool]:
         ),
     }
 
-    # ✅ Instagram cookies (optional, but strongly recommended)
-    if platform == "instagram":
-        if os.path.exists(INSTAGRAM_COOKIES):
-            ydl_opts["cookiefile"] = INSTAGRAM_COOKIES
-            logger.info(f"[user={user_id}] using instagram cookies")
-        else:
-            logger.warning(f"[user={user_id}] instagram cookies not found")
+    if is_instagram and os.path.exists(INSTAGRAM_COOKIES):
+        ydl_opts["cookiefile"] = INSTAGRAM_COOKIES
+        logger.info(f"[user={user_id}] using instagram cookies")
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=True)
         filepath = info.get("_filename") or ydl.prepare_filename(info)
 
     if not os.path.exists(filepath):
-        raise FileNotFoundError("Файл не найден после загрузки")
+        raise RuntimeError("Download failed")
 
-    is_gif = detect_gif(info)
     size_mb = os.path.getsize(filepath) / (1024 * 1024)
+    logger.info(f"[user={user_id}] downloaded {size_mb:.1f} MB")
 
-    logger.info(
-        f"[user={user_id}] downloaded {os.path.basename(filepath)} "
-        f"({size_mb:.1f} MB, {'GIF' if is_gif else 'video'})"
-    )
-
-    return filepath, is_gif
-
-# =======================
-# OPTIMIZATION
-# =======================
-
-def optimize_video(path: str, user_id: int) -> str:
-    size = os.path.getsize(path)
-    
-    # Если файл уже подходит по размеру, не трогаем
-    if size <= MAX_FILE_SIZE:
-        return path
-    
-    # Разделяем путь на имя (base) и расширение (ext)
-    base, ext = os.path.splitext(path)
-
-    # 1. Быстрый remux — если файл не сильно больше лимита (до 90 МБ)
-    if size <= MAX_FILE_SIZE * 1.8:
-        logger.info(f"[user={user_id}] remux")
-        remux_path = f"{base}_opt{ext}"
-
-        subprocess.run(
-            ["ffmpeg", "-y", "-i", path, "-c", "copy", "-movflags", "+faststart", remux_path],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-
-        if os.path.exists(remux_path) and os.path.getsize(remux_path) <= MAX_FILE_SIZE:
-            os.remove(path)
-            return remux_path
-        
-        # Если remux не помог, удаляем временный файл
-        if os.path.exists(remux_path):
-            os.remove(remux_path)
-
-    # 2. Полное перекодирование — если remux не сработал
-    logger.info(f"[user={user_id}] recompress")
-    out = f"{base}_compressed{ext}"
-
-    subprocess.run(
-        [
-            "ffmpeg", "-y", "-i", path,
-            "-vcodec", "libx264",
-            "-preset", "veryfast",
-            "-crf", "28",
-            "-vf", "scale='min(1280,iw)':'min(720,ih)':force_original_aspect_ratio=decrease",
-            "-movflags", "+faststart",
-            out,
-        ],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-
-    if not os.path.exists(out):
-        raise RuntimeError("Ошибка перекодирования")
-
-    os.remove(path)
-    return out
+    return filepath, detect_gif(info)
 
 # =======================
 # HANDLERS
@@ -207,7 +126,8 @@ def optimize_video(path: str, user_id: int) -> str:
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "Пришли ссылку на X (Twitter) или Instagram Reel — пришлю видео."
+        "Пришли ссылку на X (Twitter) или Instagram Reel — пришлю видео.\n"
+        "Ограничение: до 50 МБ."
     )
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -215,13 +135,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = (update.message.text or "").strip()
 
     if not is_supported_url(url):
-        await update.message.reply_text(
-            "Поддерживаются ссылки на X (Twitter) и Instagram Reels."
-        )
+        await update.message.reply_text("Поддерживаются только X (Twitter) и Instagram.")
         return
 
-    allowed, wait = is_allowed(user_id)
-    if not allowed:
+    wait = rate_limit(user_id)
+    if wait:
         await update.message.reply_text(f"Подожди {wait} сек.")
         return
 
@@ -230,16 +148,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         async with DOWNLOAD_SEMAPHORE:
-            filepath, is_gif = await asyncio.to_thread(
-                download_video, url, user_id
-            )
+            filepath, is_gif = await asyncio.to_thread(download_video, url, user_id)
 
         if os.path.getsize(filepath) > MAX_FILE_SIZE:
-            await status.edit_text("🔄 Сжимаю видео...")
-            filepath = await asyncio.to_thread(optimize_video, filepath, user_id)
-
-        if os.path.getsize(filepath) > MAX_FILE_SIZE:
-            raise ValueError("Видео больше 50 МБ даже после сжатия")
+            raise ValueError("Видео больше 50 МБ")
 
         await status.edit_text("📤 Отправляю...")
 
@@ -252,11 +164,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await status.delete()
         logger.info(f"[user={user_id}] sent")
 
-    except Exception:
+    except Exception as e:
         logger.exception(f"[user={user_id}] error")
         await status.edit_text(
-            "❌ Не удалось загрузить видео.\n"
-            "Для Instagram: возможно, требуется авторизация."
+            "❌ Не удалось отправить видео.\n"
+            "Причина: файл больше 50 МБ или недоступен."
         )
 
     finally:
