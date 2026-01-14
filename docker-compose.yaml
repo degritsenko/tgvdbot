@@ -8,8 +8,8 @@ services:
     restart: unless-stopped
 
     environment:
-      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
-      OWNER_ID: your telegram id
+      TELEGRAM_BOT_TOKEN: XXXX
+      OWNER_ID: XXXX
       TZ: Europe/Moscow
     volumes:
       - ./cookies.txt:/app/cookies.txt     

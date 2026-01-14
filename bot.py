@@ -5,7 +5,7 @@ import asyncio
 import logging
 from collections import defaultdict
 from typing import Optional
-
+import yt_dlp
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
@@ -15,7 +15,7 @@ from telegram.ext import (
     filters,
 )
 
-import yt_dlp
+
 
 # =======================
 # CONFIG
@@ -24,7 +24,7 @@ import yt_dlp
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 OWNER_ID = int(os.getenv("OWNER_ID", "0"))
 
-DOWNLOAD_DIR = os.getenv("DOWNLOAD_DIR", "downloads")
+DOWNLOAD_DIR = "downloads"
 MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
 
 MAX_PARALLEL_DOWNLOADS = 3
