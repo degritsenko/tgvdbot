@@ -9,6 +9,7 @@ services:
 
     environment:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      OWNER_ID: your telegram id
       TZ: Europe/Moscow
     volumes:
       - ./cookies.txt:/app/cookies.txt     

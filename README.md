@@ -8,6 +8,7 @@ docker run -d \
   --restart unless-stopped \
   -e TELEGRAM_BOT_TOKEN=XXXX \
   -e TZ=Europe/Moscow \
+  -e OWNER_ID=your telegram id
   -v $(pwd)/cookies:/app/cookies:ro \
   gritsenko/tgvdbot
 ```
