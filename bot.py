@@ -1,5 +1,4 @@
 import asyncio
-import json
 import logging
 import os
 import shutil
@@ -162,12 +161,47 @@ def ffmpeg_tools_available() -> bool:
     return shutil.which("ffprobe") is not None and shutil.which("ffmpeg") is not None
 
 
-def should_normalize_x_video(platform: str) -> bool:
+def read_sample_aspect_ratio(filepath: str) -> Optional[str]:
+    cmd = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=sample_aspect_ratio",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        filepath,
+    ]
+    result = subprocess.run(
+        cmd,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=FFMPEG_TIMEOUT_SECONDS,
+    )
+    sar = result.stdout.strip()
+    return sar or None
+
+
+def needs_aspect_fix(filepath: str, platform: str) -> bool:
     if platform != "x" or not NORMALIZE_X_ASPECT:
         return False
     if not ffmpeg_tools_available():
         logger.warning("ffmpeg/ffprobe not found, skip aspect fix")
         return False
+
+    try:
+        sar = read_sample_aspect_ratio(filepath)
+    except Exception:
+        logger.warning("Failed to probe SAR, skip aspect fix")
+        return False
+
+    if sar in {None, "N/A", "1:1", "0:1"}:
+        return False
+
+    logger.info("Detected non-square SAR=%s, applying aspect fix", sar)
     return True
 
 
@@ -185,12 +219,6 @@ def run_ffmpeg_encode(input_path: str, output_path: str, vf: str, crf: str) -> b
         "veryfast",
         "-crf",
         crf,
-        "-pix_fmt",
-        "yuv420p",
-        "-metadata:s:v:0",
-        "rotate=0",
-        "-map_metadata",
-        "-1",
         "-c:a",
         "aac",
         "-movflags",
@@ -213,7 +241,7 @@ def run_ffmpeg_encode(input_path: str, output_path: str, vf: str, crf: str) -> b
 
 def fix_aspect_ratio(filepath: str, user_id: int, unique_id: str, attempt_index: int) -> str:
     base = f"{DOWNLOAD_DIR}/video_{user_id}_{unique_id}_a{attempt_index}"
-    normalize_vf = "scale='trunc(iw*sar/2)*2:trunc(ih/2)*2',setsar=1,setdar=iw/ih"
+    normalize_vf = "scale='trunc(iw*sar/2)*2:trunc(ih/2)*2',setsar=1"
     profiles = [
         (normalize_vf, "23", f"{base}_norm.mp4"),
         (f"{normalize_vf},scale=-2:720", "28", f"{base}_norm720.mp4"),
@@ -227,44 +255,6 @@ def fix_aspect_ratio(filepath: str, user_id: int, unique_id: str, attempt_index:
             os.remove(output_path)
 
     raise UserFacingError("После исправления пропорций видео больше 50 МБ")
-
-
-def read_video_dimensions(filepath: str) -> Optional[tuple[int, int]]:
-    if shutil.which("ffprobe") is None:
-        return None
-
-    cmd = [
-        "ffprobe",
-        "-v",
-        "error",
-        "-select_streams",
-        "v:0",
-        "-show_entries",
-        "stream=width,height",
-        "-of",
-        "json",
-        filepath,
-    ]
-    try:
-        result = subprocess.run(
-            cmd,
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=FFMPEG_TIMEOUT_SECONDS,
-        )
-        data = json.loads(result.stdout or "{}")
-        streams = data.get("streams") or []
-        if not streams:
-            return None
-        width = int(streams[0].get("width") or 0)
-        height = int(streams[0].get("height") or 0)
-        if width > 0 and height > 0:
-            return width, height
-    except Exception:
-        logger.warning("Failed to read video dimensions")
-
-    return None
 
 
 def download_video(url: str, user_id: int, platform: str) -> str:
@@ -303,7 +293,7 @@ def download_video(url: str, user_id: int, platform: str) -> str:
             )
 
             if size <= MAX_FILE_SIZE:
-                if should_normalize_x_video(platform):
+                if needs_aspect_fix(filepath, platform):
                     normalized_path = fix_aspect_ratio(filepath, user_id, unique_id, attempt_index)
                     os.remove(filepath)
                     filepath = normalized_path
@@ -391,22 +381,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     status = await update.message.reply_text("Загружаю...")
     filepath: Optional[str] = None
-    dimensions: Optional[tuple[int, int]] = None
 
     try:
         async with DOWNLOAD_SEMAPHORE:
             filepath = await asyncio.to_thread(download_video, url, user_id, platform)
-            dimensions = await asyncio.to_thread(read_video_dimensions, filepath)
 
         await safe_edit_status(status, "Отправляю...")
-        video_kwargs = {"supports_streaming": True}
-        if dimensions:
-            width, height = dimensions
-            video_kwargs["width"] = width
-            video_kwargs["height"] = height
-
         with open(filepath, "rb") as file_obj:
-            await update.message.reply_video(file_obj, **video_kwargs)
+            await update.message.reply_video(file_obj, supports_streaming=True)
 
         logger.info("[user=%s] sent", user_id)
 
