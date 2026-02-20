@@ -4,7 +4,7 @@ import os
 import sys
 import time
 from collections import defaultdict
-from typing import Any, Optional
+from typing import Optional
 from urllib.parse import urlparse
 from uuid import uuid4
 
@@ -121,35 +121,15 @@ def is_allowed(user_id: int) -> tuple[bool, Optional[int]]:
     return True, None
 
 
-def extract_known_size(info: dict[str, Any]) -> Optional[int]:
-    direct = info.get("filesize") or info.get("filesize_approx")
-    if isinstance(direct, int) and direct > 0:
-        return direct
-
-    requested = info.get("requested_downloads")
-    if isinstance(requested, list):
-        sizes = []
-        for item in requested:
-            if not isinstance(item, dict):
-                continue
-            value = item.get("filesize") or item.get("filesize_approx")
-            if isinstance(value, int) and value > 0:
-                sizes.append(value)
-        if sizes:
-            return sum(sizes)
-
-    return None
-
-
 # =======================
 # DOWNLOAD
 # =======================
 
 
-def build_ydl_opts(outtmpl: str, is_instagram: bool) -> dict[str, Any]:
-    ydl_opts: dict[str, Any] = {
+def build_ydl_opts(outtmpl: str, is_instagram: bool, format_selector: str) -> dict:
+    ydl_opts: dict = {
         "outtmpl": outtmpl,
-        "format": "best",
+        "format": format_selector,
         "merge_output_format": "mp4",
         "noplaylist": True,
         "quiet": True,
@@ -166,35 +146,70 @@ def build_ydl_opts(outtmpl: str, is_instagram: bool) -> dict[str, Any]:
     return ydl_opts
 
 
+def download_with_format(url: str, outtmpl: str, is_instagram: bool, format_selector: str) -> str:
+    ydl_opts = build_ydl_opts(outtmpl, is_instagram, format_selector)
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=True)
+        return info.get("_filename") or ydl.prepare_filename(info)
+
+
 def download_video(url: str, user_id: int, platform: str) -> str:
     unique_id = uuid4().hex
-    outtmpl = f"{DOWNLOAD_DIR}/video_{user_id}_{unique_id}.%(ext)s"
     is_instagram = platform == "instagram"
 
     logger.info("[user=%s] download start platform=%s url=%s", user_id, platform, url)
-    ydl_opts = build_ydl_opts(outtmpl, is_instagram)
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        meta = ydl.extract_info(url, download=False)
-        known_size = extract_known_size(meta)
-        if known_size and known_size > MAX_FILE_SIZE:
-            raise UserFacingError("Видео больше лимита Telegram (50 МБ)")
+    format_attempts = [
+        (
+            f"best[ext=mp4][filesize<={MAX_FILE_SIZE}]"
+            f"/best[ext=mp4][filesize_approx<={MAX_FILE_SIZE}]"
+            f"/best[filesize<={MAX_FILE_SIZE}]"
+            f"/best[filesize_approx<={MAX_FILE_SIZE}]"
+            "/best[ext=mp4]"
+        ),
+        "best[height<=1080][ext=mp4]/best[height<=1080]",
+        "best[height<=720][ext=mp4]/best[height<=720]",
+        "best[height<=540][ext=mp4]/best[height<=540]",
+    ]
 
-        info = ydl.extract_info(url, download=True)
-        filepath = info.get("_filename") or ydl.prepare_filename(info)
+    last_error: Optional[Exception] = None
+    oversize_detected = False
+    for attempt_index, format_selector in enumerate(format_attempts, start=1):
+        outtmpl = f"{DOWNLOAD_DIR}/video_{user_id}_{unique_id}_a{attempt_index}.%(ext)s"
+        filepath: Optional[str] = None
 
-    size = os.path.getsize(filepath)
-    logger.info("[user=%s] downloaded %.1f MB", user_id, size / 1024 / 1024)
+        try:
+            filepath = download_with_format(url, outtmpl, is_instagram, format_selector)
+            size = os.path.getsize(filepath)
+            logger.info(
+                "[user=%s] attempt=%s downloaded %.1f MB",
+                user_id,
+                attempt_index,
+                size / 1024 / 1024,
+            )
 
-    if size > MAX_FILE_SIZE:
-        os.remove(filepath)
+            if size <= MAX_FILE_SIZE:
+                STATS["total"] += 1
+                STATS["users"].add(user_id)
+                STATS[platform] += 1
+                return filepath
+
+            oversize_detected = True
+            os.remove(filepath)
+        except Exception as exc:
+            last_error = exc
+            if filepath and os.path.exists(filepath):
+                os.remove(filepath)
+            logger.info("[user=%s] attempt=%s failed", user_id, attempt_index)
+
+    if oversize_detected:
         raise UserFacingError("Видео больше лимита Telegram (50 МБ)")
 
-    STATS["total"] += 1
-    STATS["users"].add(user_id)
-    STATS[platform] += 1
+    if last_error is not None:
+        logger.info("[user=%s] all attempts failed: %s", user_id, last_error)
+        raise last_error
 
-    return filepath
+    raise UserFacingError("Не удалось скачать видео.")
 
 
 # =======================
