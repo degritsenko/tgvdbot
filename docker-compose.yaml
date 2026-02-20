@@ -4,12 +4,18 @@ services:
   tgvdbot:
     image: gritsenko/tgvdbot
     container_name: tgvdbot
-
     restart: unless-stopped
 
     environment:
-      TELEGRAM_BOT_TOKEN: XXXX
-      OWNER_ID: XXXX
-      TZ: Europe/Moscow
+      TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN}"
+      OWNER_ID: "${OWNER_ID:-0}"
+      TZ: "${TZ:-Europe/Moscow}"
+      INSTAGRAM_COOKIES: "/app/cookies/instagram.txt"
+      MAX_PARALLEL_DOWNLOADS: "3"
+      RATE_LIMIT_REQUESTS: "5"
+      RATE_LIMIT_WINDOW: "60"
+      MAX_FILE_SIZE: "52428800"
+
     volumes:
-      - ./cookies.txt:/app/cookies.txt     
+      - ./cookies:/app/cookies:ro
+      - ./downloads:/app/downloads
