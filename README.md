@@ -26,6 +26,7 @@ For X videos with broken SAR, bot can auto-fix aspect ratio via `ffmpeg`.
 - `RATE_LIMIT_WINDOW` (optional, seconds, default `60`)
 - `NORMALIZE_X_ASPECT` (optional, `1`/`0`, default `1`)
 - `FFMPEG_TIMEOUT_SECONDS` (optional, default `180`)
+- `SEND_X_AS_DOCUMENT` (optional, `1`/`0`, default `1`)
 
 ## docker run
 ```bash
