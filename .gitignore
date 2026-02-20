@@ -1,9 +1,14 @@
 # macOS
 .DS_Store
 
+# Python
+__pycache__/
+*.py[cod]
 
-# Docker
-.docker/
-
-# Misc
+# Runtime artifacts
+downloads/
 *.log
+
+# Local secrets / session data
+cookies/*.txt
+!cookies/.gitkeep
