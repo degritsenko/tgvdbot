@@ -241,10 +241,11 @@ def run_ffmpeg_encode(input_path: str, output_path: str, vf: str, crf: str) -> b
 
 def fix_aspect_ratio(filepath: str, user_id: int, unique_id: str, attempt_index: int) -> str:
     base = f"{DOWNLOAD_DIR}/video_{user_id}_{unique_id}_a{attempt_index}"
+    normalize_vf = "scale='trunc(iw*sar/2)*2:trunc(ih/2)*2',setsar=1"
     profiles = [
-        ("setsar=1,scale=trunc(iw/2)*2:trunc(ih/2)*2", "23", f"{base}_norm.mp4"),
-        ("setsar=1,scale=-2:720", "28", f"{base}_norm720.mp4"),
-        ("setsar=1,scale=-2:540", "30", f"{base}_norm540.mp4"),
+        (normalize_vf, "23", f"{base}_norm.mp4"),
+        (f"{normalize_vf},scale=-2:720", "28", f"{base}_norm720.mp4"),
+        (f"{normalize_vf},scale=-2:540", "30", f"{base}_norm540.mp4"),
     ]
 
     for vf, crf, output_path in profiles:
