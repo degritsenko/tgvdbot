@@ -12,3 +12,4 @@ downloads/
 # Local secrets / session data
 cookies/*.txt
 !cookies/.gitkeep
+!cookies/instagram.txt
