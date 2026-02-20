@@ -17,7 +17,6 @@ services:
       MAX_FILE_SIZE: "52428800"
       NORMALIZE_X_ASPECT: "1"
       FFMPEG_TIMEOUT_SECONDS: "180"
-      SEND_X_AS_DOCUMENT: "1"
 
     volumes:
       - ./cookies:/app/cookies:ro

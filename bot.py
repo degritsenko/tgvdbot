@@ -50,7 +50,6 @@ RATE_LIMIT_WINDOW = get_env_int("RATE_LIMIT_WINDOW", 60)
 INSTAGRAM_COOKIES = os.getenv("INSTAGRAM_COOKIES", "/app/cookies/instagram.txt")
 NORMALIZE_X_ASPECT = os.getenv("NORMALIZE_X_ASPECT", "1") == "1"
 FFMPEG_TIMEOUT_SECONDS = get_env_int("FFMPEG_TIMEOUT_SECONDS", 180)
-SEND_X_AS_DOCUMENT = os.getenv("SEND_X_AS_DOCUMENT", "1") == "1"
 
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
@@ -400,16 +399,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             dimensions = await asyncio.to_thread(read_video_dimensions, filepath)
 
         await safe_edit_status(status, "Отправляю...")
+        video_kwargs = {"supports_streaming": True}
+        if dimensions:
+            width, height = dimensions
+            video_kwargs["width"] = width
+            video_kwargs["height"] = height
+
         with open(filepath, "rb") as file_obj:
-            if platform == "x" and SEND_X_AS_DOCUMENT:
-                await update.message.reply_document(file_obj)
-            else:
-                video_kwargs = {"supports_streaming": True}
-                if dimensions:
-                    width, height = dimensions
-                    video_kwargs["width"] = width
-                    video_kwargs["height"] = height
-                await update.message.reply_video(file_obj, **video_kwargs)
+            await update.message.reply_video(file_obj, **video_kwargs)
 
         logger.info("[user=%s] sent", user_id)
 
