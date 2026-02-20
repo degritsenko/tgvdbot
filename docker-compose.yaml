@@ -15,6 +15,8 @@ services:
       RATE_LIMIT_REQUESTS: "5"
       RATE_LIMIT_WINDOW: "60"
       MAX_FILE_SIZE: "52428800"
+      NORMALIZE_X_ASPECT: "1"
+      FFMPEG_TIMEOUT_SECONDS: "180"
 
     volumes:
       - ./cookies:/app/cookies:ro
