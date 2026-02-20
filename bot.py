@@ -49,6 +49,7 @@ RATE_LIMIT_WINDOW = get_env_int("RATE_LIMIT_WINDOW", 60)
 INSTAGRAM_COOKIES = os.getenv("INSTAGRAM_COOKIES", "/app/cookies/instagram.txt")
 NORMALIZE_X_ASPECT = os.getenv("NORMALIZE_X_ASPECT", "1") == "1"
 FFMPEG_TIMEOUT_SECONDS = get_env_int("FFMPEG_TIMEOUT_SECONDS", 180)
+SEND_X_AS_DOCUMENT = os.getenv("SEND_X_AS_DOCUMENT", "1") == "1"
 
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
@@ -85,6 +86,7 @@ STATS = {
     "errors": 0,
     "users": set(),
 }
+X_SEND_MODE = "document" if SEND_X_AS_DOCUMENT else "video"
 
 
 class UserFacingError(Exception):
@@ -333,7 +335,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         "Пришли ссылку на X (Twitter) или Instagram Reel, пришлю видео.\n"
-        "Видео больше 50 МБ не поддерживаются."
+        "Видео больше 50 МБ не поддерживаются.\n"
+        "/xmode video|document - режим отправки X-ссылок (owner only)."
     )
 
 
@@ -351,7 +354,8 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Instagram: {STATS['instagram']}\n"
         f"X (Twitter): {STATS['x']}\n"
         f"Ошибок: {STATS['errors']}\n"
-        f"Пользователей: {len(STATS['users'])}"
+        f"Пользователей: {len(STATS['users'])}\n"
+        f"X mode: {X_SEND_MODE}"
     )
 
 
@@ -360,6 +364,27 @@ async def safe_edit_status(status_message, text: str):
         await status_message.edit_text(text)
     except Exception:
         logger.warning("Failed to edit status message")
+
+
+async def xmode(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global X_SEND_MODE
+    if not update.message or not update.effective_user:
+        return
+
+    if update.effective_user.id != OWNER_ID:
+        return
+
+    if not context.args:
+        await update.message.reply_text(f"Текущий режим X: {X_SEND_MODE}. Используй /xmode video|document")
+        return
+
+    mode = context.args[0].strip().lower()
+    if mode not in {"video", "document"}:
+        await update.message.reply_text("Неверный режим. Используй /xmode video|document")
+        return
+
+    X_SEND_MODE = mode
+    await update.message.reply_text(f"Режим X переключен на: {X_SEND_MODE}")
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -388,7 +413,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await safe_edit_status(status, "Отправляю...")
         with open(filepath, "rb") as file_obj:
-            await update.message.reply_video(file_obj, supports_streaming=True)
+            if platform == "x" and X_SEND_MODE == "document":
+                await update.message.reply_document(file_obj)
+            else:
+                await update.message.reply_video(file_obj, supports_streaming=True)
 
         logger.info("[user=%s] sent", user_id)
 
@@ -416,6 +444,7 @@ def main():
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("stats", stats))
+    app.add_handler(CommandHandler("xmode", xmode))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     app.run_polling(drop_pending_updates=True)
