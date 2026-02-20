@@ -1,8 +1,6 @@
 import asyncio
 import logging
 import os
-import shutil
-import subprocess
 import sys
 import time
 from collections import defaultdict
@@ -47,9 +45,6 @@ MAX_PARALLEL_DOWNLOADS = get_env_int("MAX_PARALLEL_DOWNLOADS", 3)
 RATE_LIMIT_REQUESTS = get_env_int("RATE_LIMIT_REQUESTS", 5)
 RATE_LIMIT_WINDOW = get_env_int("RATE_LIMIT_WINDOW", 60)
 INSTAGRAM_COOKIES = os.getenv("INSTAGRAM_COOKIES", "/app/cookies/instagram.txt")
-NORMALIZE_X_ASPECT = os.getenv("NORMALIZE_X_ASPECT", "1") == "1"
-FFMPEG_TIMEOUT_SECONDS = get_env_int("FFMPEG_TIMEOUT_SECONDS", 180)
-SEND_X_AS_DOCUMENT = os.getenv("SEND_X_AS_DOCUMENT", "1") == "1"
 
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
@@ -86,7 +81,6 @@ STATS = {
     "errors": 0,
     "users": set(),
 }
-X_SEND_MODE = "document" if SEND_X_AS_DOCUMENT else "video"
 
 
 class UserFacingError(Exception):
@@ -159,106 +153,6 @@ def download_with_format(url: str, outtmpl: str, is_instagram: bool, format_sele
         return info.get("_filename") or ydl.prepare_filename(info)
 
 
-def ffmpeg_tools_available() -> bool:
-    return shutil.which("ffprobe") is not None and shutil.which("ffmpeg") is not None
-
-
-def read_sample_aspect_ratio(filepath: str) -> Optional[str]:
-    cmd = [
-        "ffprobe",
-        "-v",
-        "error",
-        "-select_streams",
-        "v:0",
-        "-show_entries",
-        "stream=sample_aspect_ratio",
-        "-of",
-        "default=noprint_wrappers=1:nokey=1",
-        filepath,
-    ]
-    result = subprocess.run(
-        cmd,
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=FFMPEG_TIMEOUT_SECONDS,
-    )
-    sar = result.stdout.strip()
-    return sar or None
-
-
-def needs_aspect_fix(filepath: str, platform: str) -> bool:
-    if platform != "x" or not NORMALIZE_X_ASPECT:
-        return False
-    if not ffmpeg_tools_available():
-        logger.warning("ffmpeg/ffprobe not found, skip aspect fix")
-        return False
-
-    try:
-        sar = read_sample_aspect_ratio(filepath)
-    except Exception:
-        logger.warning("Failed to probe SAR, skip aspect fix")
-        return False
-
-    if sar in {None, "N/A", "1:1", "0:1"}:
-        return False
-
-    logger.info("Detected non-square SAR=%s, applying aspect fix", sar)
-    return True
-
-
-def run_ffmpeg_encode(input_path: str, output_path: str, vf: str, crf: str) -> bool:
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-i",
-        input_path,
-        "-vf",
-        vf,
-        "-c:v",
-        "libx264",
-        "-preset",
-        "veryfast",
-        "-crf",
-        crf,
-        "-c:a",
-        "aac",
-        "-movflags",
-        "+faststart",
-        output_path,
-    ]
-    try:
-        subprocess.run(
-            cmd,
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=FFMPEG_TIMEOUT_SECONDS,
-        )
-        return True
-    except Exception:
-        logger.info("ffmpeg encode failed for crf=%s vf=%s", crf, vf)
-        return False
-
-
-def fix_aspect_ratio(filepath: str, user_id: int, unique_id: str, attempt_index: int) -> str:
-    base = f"{DOWNLOAD_DIR}/video_{user_id}_{unique_id}_a{attempt_index}"
-    normalize_vf = "scale='trunc(iw*sar/2)*2:trunc(ih/2)*2',setsar=1"
-    profiles = [
-        (normalize_vf, "23", f"{base}_norm.mp4"),
-        (f"{normalize_vf},scale=-2:720", "28", f"{base}_norm720.mp4"),
-        (f"{normalize_vf},scale=-2:540", "30", f"{base}_norm540.mp4"),
-    ]
-
-    for vf, crf, output_path in profiles:
-        if run_ffmpeg_encode(filepath, output_path, vf, crf):
-            if os.path.getsize(output_path) <= MAX_FILE_SIZE:
-                return output_path
-            os.remove(output_path)
-
-    raise UserFacingError("После исправления пропорций видео больше 50 МБ")
-
-
 def download_video(url: str, user_id: int, platform: str) -> str:
     unique_id = uuid4().hex
     is_instagram = platform == "instagram"
@@ -295,11 +189,6 @@ def download_video(url: str, user_id: int, platform: str) -> str:
             )
 
             if size <= MAX_FILE_SIZE:
-                if needs_aspect_fix(filepath, platform):
-                    normalized_path = fix_aspect_ratio(filepath, user_id, unique_id, attempt_index)
-                    os.remove(filepath)
-                    filepath = normalized_path
-
                 STATS["total"] += 1
                 STATS["users"].add(user_id)
                 STATS[platform] += 1
@@ -335,8 +224,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         "Пришли ссылку на X (Twitter) или Instagram Reel, пришлю видео.\n"
-        "Видео больше 50 МБ не поддерживаются.\n"
-        "/xmode video|document - режим отправки X-ссылок (owner only)."
+        "Видео больше 50 МБ не поддерживаются."
     )
 
 
@@ -354,8 +242,7 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Instagram: {STATS['instagram']}\n"
         f"X (Twitter): {STATS['x']}\n"
         f"Ошибок: {STATS['errors']}\n"
-        f"Пользователей: {len(STATS['users'])}\n"
-        f"X mode: {X_SEND_MODE}"
+        f"Пользователей: {len(STATS['users'])}"
     )
 
 
@@ -364,27 +251,6 @@ async def safe_edit_status(status_message, text: str):
         await status_message.edit_text(text)
     except Exception:
         logger.warning("Failed to edit status message")
-
-
-async def xmode(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global X_SEND_MODE
-    if not update.message or not update.effective_user:
-        return
-
-    if update.effective_user.id != OWNER_ID:
-        return
-
-    if not context.args:
-        await update.message.reply_text(f"Текущий режим X: {X_SEND_MODE}. Используй /xmode video|document")
-        return
-
-    mode = context.args[0].strip().lower()
-    if mode not in {"video", "document"}:
-        await update.message.reply_text("Неверный режим. Используй /xmode video|document")
-        return
-
-    X_SEND_MODE = mode
-    await update.message.reply_text(f"Режим X переключен на: {X_SEND_MODE}")
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -413,10 +279,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await safe_edit_status(status, "Отправляю...")
         with open(filepath, "rb") as file_obj:
-            if platform == "x" and X_SEND_MODE == "document":
-                await update.message.reply_document(file_obj)
-            else:
-                await update.message.reply_video(file_obj, supports_streaming=True)
+            await update.message.reply_video(file_obj, supports_streaming=True)
 
         logger.info("[user=%s] sent", user_id)
 
@@ -444,7 +307,6 @@ def main():
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("stats", stats))
-    app.add_handler(CommandHandler("xmode", xmode))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     app.run_polling(drop_pending_updates=True)

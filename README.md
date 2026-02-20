@@ -2,7 +2,6 @@
 A minimal Telegram bot for downloading videos from **X (Twitter)** and **Instagram Reels**.
 
 Built on top of `yt-dlp`.
-For X videos with broken SAR, bot can auto-fix aspect ratio via `ffmpeg`.
 
 ## Features
 - Download videos from:
@@ -13,8 +12,6 @@ For X videos with broken SAR, bot can auto-fix aspect ratio via `ffmpeg`.
 - `/stats` command (owner only)
 - Rate limiting per user
 - Async downloads with parallel limit
-- Auto-fix for distorted X videos (ffmpeg fallback)
-- Configurable X delivery mode: `video` or `document`
 
 ## Environment variables
 - `TELEGRAM_BOT_TOKEN` (required)
@@ -25,9 +22,6 @@ For X videos with broken SAR, bot can auto-fix aspect ratio via `ffmpeg`.
 - `MAX_PARALLEL_DOWNLOADS` (optional, default `3`)
 - `RATE_LIMIT_REQUESTS` (optional, default `5`)
 - `RATE_LIMIT_WINDOW` (optional, seconds, default `60`)
-- `NORMALIZE_X_ASPECT` (optional, `1`/`0`, default `1`)
-- `FFMPEG_TIMEOUT_SECONDS` (optional, default `180`)
-- `SEND_X_AS_DOCUMENT` (optional, `1`/`0`, default `1`)
 
 ## docker run
 ```bash
@@ -53,7 +47,3 @@ For stable Reels support, cookies are strongly recommended.
 
 ## docker-compose
 Use `docker-compose.yaml` and set `TELEGRAM_BOT_TOKEN` / `OWNER_ID` in your shell or `.env`.
-
-## X mode
-- `/xmode document` - send X downloads as files (best compatibility, default).
-- `/xmode video` - send X downloads in Telegram video player.
