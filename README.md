@@ -1,5 +1,5 @@
 # tgvdbot
-A minimal Telegram bot for downloading videos from **X (Twitter)** and **Instagram Reels**.
+A minimal Telegram bot for downloading videos from **X (Twitter)**, **Instagram Reels**, and **Threads**.
 
 Built on top of `yt-dlp`.
 
@@ -7,6 +7,7 @@ Built on top of `yt-dlp`.
 - Download videos from:
   - X (`twitter.com` / `x.com` / `t.co`)
   - Instagram Reels
+  - Threads (`threads.com` / `threads.net`)
 - Telegram limit aware (50 MB by default)
 - Optional Instagram cookies support
 - `/stats` command (owner only)
@@ -47,3 +48,7 @@ For stable Reels support, cookies are strongly recommended.
 
 ## docker-compose
 Use `docker-compose.yaml` and set `TELEGRAM_BOT_TOKEN` / `OWNER_ID` in your shell or `.env`.
+
+## Threads support
+Threads downloads use the `yt-dlp-threads` extractor plugin.
+It supports public video posts and share links; private or login-gated posts are not supported.

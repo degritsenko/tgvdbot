@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import re
 import sys
 import time
 from collections import defaultdict
@@ -50,6 +51,7 @@ os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 X_HOSTS = {"twitter.com", "www.twitter.com", "x.com", "www.x.com", "t.co"}
 INSTAGRAM_HOSTS = {"instagram.com", "www.instagram.com", "m.instagram.com"}
+THREADS_HOSTS = {"threads.com", "www.threads.com", "threads.net", "www.threads.net"}
 
 # =======================
 # LOGGING
@@ -77,6 +79,7 @@ LAST_REQUESTS: dict[int, list[float]] = defaultdict(list)
 STATS = {
     "total": 0,
     "instagram": 0,
+    "threads": 0,
     "x": 0,
     "errors": 0,
     "users": set(),
@@ -92,6 +95,16 @@ class UserFacingError(Exception):
 # =======================
 
 
+URL_RE = re.compile(r"https?://[^\s)\]]+")
+
+
+def extract_url(text: str) -> Optional[str]:
+    match = URL_RE.search(text.strip())
+    if not match:
+        return None
+    return match.group(0)
+
+
 def parse_platform(url: str) -> Optional[str]:
     try:
         parsed = urlparse(url)
@@ -104,6 +117,8 @@ def parse_platform(url: str) -> Optional[str]:
     host = (parsed.hostname or "").lower()
     if host in INSTAGRAM_HOSTS:
         return "instagram"
+    if host in THREADS_HOSTS:
+        return "threads"
     if host in X_HOSTS:
         return "x"
     return None
@@ -223,7 +238,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await update.message.reply_text(
-        "Пришли ссылку на X (Twitter) или Instagram Reel, пришлю видео.\n"
+        "Пришли ссылку на X (Twitter), Instagram Reel или Threads, пришлю видео.\n"
         "Видео больше 50 МБ не поддерживаются."
     )
 
@@ -240,6 +255,7 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Статистика:\n\n"
         f"Всего запросов: {STATS['total']}\n"
         f"Instagram: {STATS['instagram']}\n"
+        f"Threads: {STATS['threads']}\n"
         f"X (Twitter): {STATS['x']}\n"
         f"Ошибок: {STATS['errors']}\n"
         f"Пользователей: {len(STATS['users'])}"
@@ -259,7 +275,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     user_id = update.effective_user.id
-    url = (update.message.text or "").strip()
+    url = extract_url(update.message.text or "")
+    if url is None:
+        return
 
     platform = parse_platform(url)
     if platform is None:
