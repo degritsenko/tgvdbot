@@ -1,22 +1,19 @@
 # tgvdbot
-A minimal Telegram bot for downloading videos from **X (Twitter)**, **Instagram Reels**, and **Threads**.
+Telegram bot for downloading videos from **X (Twitter)**, **Instagram Reels**, and **Threads**.
 
-Built on top of `yt-dlp`.
+Built on `yt-dlp` with a Threads extractor plugin.
 
 ## Features
-- Download videos from:
-  - X (`twitter.com` / `x.com` / `t.co`)
-  - Instagram Reels
-  - Threads (`threads.com` / `threads.net`)
-- Telegram limit aware (50 MB by default)
-- Optional Instagram cookies support
+- X, Instagram Reels, and Threads downloads
+- 50 MB Telegram file limit
+- Required Instagram cookies support
 - Rate limiting per user
-- Async downloads with parallel limit
+- Parallel download limit
 
 ## Environment variables
 - `TELEGRAM_BOT_TOKEN` (required)
 - `DOWNLOAD_DIR` (optional, default `downloads`)
-- `INSTAGRAM_COOKIES` (optional, default `/app/cookies/instagram.txt`)
+- `INSTAGRAM_COOKIES` (default `/app/cookies/instagram.txt`)
 - `MAX_FILE_SIZE` (optional, bytes, default `52428800`)
 - `MAX_PARALLEL_DOWNLOADS` (optional, default `3`)
 - `RATE_LIMIT_REQUESTS` (optional, default `5`)
@@ -35,8 +32,8 @@ docker run -d \
 ```
 
 ## Instagram setup (cookies)
-Instagram may block anonymous downloads.
-For stable Reels support, cookies are strongly recommended.
+Instagram Reels require cookies for reliable downloads.
+Without cookies, Instagram usually returns login or rate-limit errors.
 
 1. Install browser extension `Get cookies.txt`.
 2. Log in to `instagram.com`.
