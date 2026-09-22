@@ -10,13 +10,11 @@ Built on top of `yt-dlp`.
   - Threads (`threads.com` / `threads.net`)
 - Telegram limit aware (50 MB by default)
 - Optional Instagram cookies support
-- `/stats` command (owner only)
 - Rate limiting per user
 - Async downloads with parallel limit
 
 ## Environment variables
 - `TELEGRAM_BOT_TOKEN` (required)
-- `OWNER_ID` (optional, default `0`)
 - `DOWNLOAD_DIR` (optional, default `downloads`)
 - `INSTAGRAM_COOKIES` (optional, default `/app/cookies/instagram.txt`)
 - `MAX_FILE_SIZE` (optional, bytes, default `52428800`)
@@ -30,7 +28,6 @@ docker run -d \
   --name tgvdbot \
   --restart unless-stopped \
   -e TELEGRAM_BOT_TOKEN=XXXX \
-  -e OWNER_ID=XXXX \
   -e TZ=Europe/Moscow \
   -v "$(pwd)/cookies:/app/cookies:ro" \
   -v "$(pwd)/downloads:/app/downloads" \
@@ -47,7 +44,7 @@ For stable Reels support, cookies are strongly recommended.
 4. Save file to `cookies/instagram.txt`.
 
 ## docker-compose
-Use `docker-compose.yaml` and set `TELEGRAM_BOT_TOKEN` / `OWNER_ID` in your shell or `.env`.
+Use `docker-compose.yaml` and set `TELEGRAM_BOT_TOKEN` in your shell or `.env`.
 
 ## Threads support
 Threads downloads use the `yt-dlp-threads` extractor plugin.

@@ -6,7 +6,6 @@ services:
 
     environment:
       TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN}"
-      OWNER_ID: "${OWNER_ID:-0}"
       TZ: "${TZ:-Europe/Moscow}"
       INSTAGRAM_COOKIES: "/app/cookies/instagram.txt"
       MAX_PARALLEL_DOWNLOADS: "3"

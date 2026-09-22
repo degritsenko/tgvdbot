@@ -39,7 +39,6 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 if not TELEGRAM_BOT_TOKEN:
     raise RuntimeError("TELEGRAM_BOT_TOKEN не задан")
 
-OWNER_ID = get_env_int("OWNER_ID", 0)
 DOWNLOAD_DIR = os.getenv("DOWNLOAD_DIR", "downloads")
 MAX_FILE_SIZE = get_env_int("MAX_FILE_SIZE", 50 * 1024 * 1024)
 MAX_PARALLEL_DOWNLOADS = get_env_int("MAX_PARALLEL_DOWNLOADS", 3)
@@ -75,15 +74,6 @@ logging.getLogger("yt_dlp").setLevel(logging.ERROR)
 
 DOWNLOAD_SEMAPHORE = asyncio.Semaphore(MAX_PARALLEL_DOWNLOADS)
 LAST_REQUESTS: dict[int, list[float]] = defaultdict(list)
-
-STATS = {
-    "total": 0,
-    "instagram": 0,
-    "threads": 0,
-    "x": 0,
-    "errors": 0,
-    "users": set(),
-}
 
 
 class UserFacingError(Exception):
@@ -204,9 +194,6 @@ def download_video(url: str, user_id: int, platform: str) -> str:
             )
 
             if size <= MAX_FILE_SIZE:
-                STATS["total"] += 1
-                STATS["users"].add(user_id)
-                STATS[platform] += 1
                 return filepath
 
             oversize_detected = True
@@ -240,25 +227,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Пришли ссылку на X (Twitter), Instagram Reel или Threads, пришлю видео.\n"
         "Видео больше 50 МБ не поддерживаются."
-    )
-
-
-async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    del context
-    if not update.message or not update.effective_user:
-        return
-
-    if update.effective_user.id != OWNER_ID:
-        return
-
-    await update.message.reply_text(
-        "Статистика:\n\n"
-        f"Всего запросов: {STATS['total']}\n"
-        f"Instagram: {STATS['instagram']}\n"
-        f"Threads: {STATS['threads']}\n"
-        f"X (Twitter): {STATS['x']}\n"
-        f"Ошибок: {STATS['errors']}\n"
-        f"Пользователей: {len(STATS['users'])}"
     )
 
 
@@ -302,11 +270,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.info("[user=%s] sent", user_id)
 
     except UserFacingError as exc:
-        STATS["errors"] += 1
         logger.info("[user=%s] user-facing error: %s", user_id, exc)
         await safe_edit_status(status, str(exc))
     except Exception:
-        STATS["errors"] += 1
         logger.exception("[user=%s] unexpected error", user_id)
         await safe_edit_status(status, "Не удалось скачать видео. Попробуй другую ссылку позже.")
     finally:
@@ -324,7 +290,6 @@ def main():
 
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("stats", stats))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     app.run_polling(drop_pending_updates=True)
