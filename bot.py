@@ -1,9 +1,11 @@
 import asyncio
+import html
 import logging
 import os
 import re
 import sys
 import time
+import urllib.request
 from collections import defaultdict
 from typing import Optional
 from urllib.parse import urlparse
@@ -86,6 +88,7 @@ class UserFacingError(Exception):
 
 
 URL_RE = re.compile(r"https?://[^\s)\]]+")
+MP4_URL_RE = re.compile(r"https?://[^\s\\\"'<>]+?\.mp4(?:\?[^\s\\\"'<>]*)?")
 
 
 def extract_url(text: str) -> Optional[str]:
@@ -131,6 +134,76 @@ def classify_download_error(exc: Exception, platform: str) -> Optional[UserFacin
     if platform == "threads" and "has no downloadable video" in message:
         return UserFacingError("В этом Threads-посте нет видео для скачивания.")
     return None
+
+
+def is_threads_no_video_error(exc: Exception) -> bool:
+    return "has no downloadable video" in str(exc)
+
+
+def is_threads_media_url(url: str) -> bool:
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    if host == "static.cdninstagram.com":
+        return False
+    return "cdninstagram.com" in host or "fbcdn.net" in host
+
+
+def extract_threads_video_candidates(page: str) -> list[str]:
+    normalized = html.unescape(page)
+    normalized = normalized.replace(r"\/", "/").replace(r"\u0026", "&").replace(r"\&", "&")
+
+    candidates: list[str] = []
+    seen: set[str] = set()
+    for match in MP4_URL_RE.finditer(normalized):
+        url = match.group(0)
+        if url not in seen and is_threads_media_url(url):
+            seen.add(url)
+            candidates.append(url)
+    return candidates
+
+
+def download_direct_url(url: str, filepath: str) -> str:
+    request = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0.0.0 Safari/537.36"
+            )
+        },
+    )
+    with urllib.request.urlopen(request, timeout=30) as response, open(filepath, "wb") as file_obj:
+        while True:
+            chunk = response.read(1024 * 1024)
+            if not chunk:
+                break
+            file_obj.write(chunk)
+            if file_obj.tell() > MAX_FILE_SIZE:
+                raise UserFacingError("Видео больше лимита Telegram (50 МБ)")
+    return filepath
+
+
+def download_threads_fallback(url: str, filepath: str) -> Optional[str]:
+    request = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0.0.0 Safari/537.36"
+            )
+        },
+    )
+    with urllib.request.urlopen(request, timeout=30) as response:
+        page = response.read().decode("utf-8", errors="ignore")
+
+    candidates = extract_threads_video_candidates(page)
+    if len(candidates) != 1:
+        logger.info("threads fallback skipped: candidates=%s", len(candidates))
+        return None
+
+    return download_direct_url(candidates[0], filepath)
 
 
 # =======================
@@ -206,6 +279,23 @@ def download_video(url: str, user_id: int, platform: str) -> str:
             oversize_detected = True
             os.remove(filepath)
         except Exception as exc:
+            if platform == "threads" and is_threads_no_video_error(exc):
+                fallback_path = f"{DOWNLOAD_DIR}/video_{user_id}_{unique_id}_fallback.mp4"
+                try:
+                    filepath = download_threads_fallback(url, fallback_path)
+                    if filepath:
+                        size = os.path.getsize(filepath)
+                        logger.info("[user=%s] threads fallback downloaded %.1f MB", user_id, size / 1024 / 1024)
+                        return filepath
+                except UserFacingError:
+                    if os.path.exists(fallback_path):
+                        os.remove(fallback_path)
+                    raise
+                except Exception as fallback_exc:
+                    logger.info("[user=%s] threads fallback failed: %s", user_id, fallback_exc)
+                    if os.path.exists(fallback_path):
+                        os.remove(fallback_path)
+
             user_error = classify_download_error(exc, platform)
             if filepath and os.path.exists(filepath):
                 os.remove(filepath)
