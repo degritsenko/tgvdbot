@@ -126,6 +126,13 @@ def is_allowed(user_id: int) -> tuple[bool, Optional[int]]:
     return True, None
 
 
+def classify_download_error(exc: Exception, platform: str) -> Optional[UserFacingError]:
+    message = str(exc)
+    if platform == "threads" and "has no downloadable video" in message:
+        return UserFacingError("В этом Threads-посте нет видео для скачивания.")
+    return None
+
+
 # =======================
 # DOWNLOAD
 # =======================
@@ -199,9 +206,14 @@ def download_video(url: str, user_id: int, platform: str) -> str:
             oversize_detected = True
             os.remove(filepath)
         except Exception as exc:
-            last_error = exc
+            user_error = classify_download_error(exc, platform)
             if filepath and os.path.exists(filepath):
                 os.remove(filepath)
+            if user_error is not None:
+                logger.info("[user=%s] attempt=%s stopped: %s", user_id, attempt_index, user_error)
+                raise user_error
+
+            last_error = exc
             logger.info("[user=%s] attempt=%s failed", user_id, attempt_index)
 
     if oversize_detected:
