@@ -1,5 +1,6 @@
 import asyncio
 import html
+import json
 import logging
 import os
 import re
@@ -89,6 +90,12 @@ class UserFacingError(Exception):
 
 URL_RE = re.compile(r"https?://[^\s)\]]+")
 MP4_URL_RE = re.compile(r"https?://[^\s\\\"'<>]+?\.mp4(?:\?[^\s\\\"'<>]*)?")
+THREADS_JSON_RE = re.compile(
+    r'<script type=["\']application/json["\'][^>]*>(.*?)</script>',
+    re.DOTALL,
+)
+THREADS_POST_CODE_RE = re.compile(r"/post/([\w-]+)")
+THREADS_CRAWLER_USER_AGENT = "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"
 
 
 def extract_url(text: str) -> Optional[str]:
@@ -160,6 +167,51 @@ def extract_threads_video_candidates(page: str) -> list[str]:
             seen.add(url)
             candidates.append(url)
     return candidates
+
+
+def extract_threads_quoted_post_url(page: str, target_code: str) -> Optional[str]:
+    def find_quoted_url(value) -> Optional[str]:
+        if isinstance(value, dict):
+            if value.get("code") == target_code:
+                text_info = value.get("text_post_app_info") or {}
+                share_info = text_info.get("share_info") or {}
+                quoted_post = share_info.get("quoted_attachment_post") or {}
+                permalink = quoted_post.get("permalink")
+                if isinstance(permalink, str) and parse_platform(permalink) == "threads":
+                    return permalink
+
+            for nested in value.values():
+                result = find_quoted_url(nested)
+                if result:
+                    return result
+        elif isinstance(value, list):
+            for nested in value:
+                result = find_quoted_url(nested)
+                if result:
+                    return result
+        return None
+
+    for block in THREADS_JSON_RE.findall(page):
+        try:
+            data = json.loads(block)
+        except (TypeError, ValueError):
+            continue
+        result = find_quoted_url(data)
+        if result:
+            return result
+    return None
+
+
+def resolve_threads_quoted_post_url(url: str) -> Optional[str]:
+    request = urllib.request.Request(url, headers={"User-Agent": THREADS_CRAWLER_USER_AGENT})
+    with urllib.request.urlopen(request, timeout=30) as response:
+        final_url = response.geturl()
+        page = response.read().decode("utf-8", errors="ignore")
+
+    match = THREADS_POST_CODE_RE.search(final_url)
+    if match is None:
+        return None
+    return extract_threads_quoted_post_url(page, match.group(1))
 
 
 def download_direct_url(url: str, filepath: str) -> str:
@@ -259,12 +311,15 @@ def download_video(url: str, user_id: int, platform: str) -> str:
 
     last_error: Optional[Exception] = None
     oversize_detected = False
+    quoted_url: Optional[str] = None
+    quoted_url_checked = False
     for attempt_index, format_selector in enumerate(format_attempts, start=1):
         outtmpl = f"{DOWNLOAD_DIR}/video_{user_id}_{unique_id}_a{attempt_index}.%(ext)s"
         filepath: Optional[str] = None
+        attempt_url = quoted_url or url
 
         try:
-            filepath = download_with_format(url, outtmpl, is_instagram, format_selector)
+            filepath = download_with_format(attempt_url, outtmpl, is_instagram, format_selector)
             size = os.path.getsize(filepath)
             logger.info(
                 "[user=%s] attempt=%s downloaded %.1f MB",
@@ -279,6 +334,43 @@ def download_video(url: str, user_id: int, platform: str) -> str:
             oversize_detected = True
             os.remove(filepath)
         except Exception as exc:
+            if (
+                platform == "threads"
+                and attempt_url == url
+                and is_threads_no_video_error(exc)
+                and not quoted_url_checked
+            ):
+                quoted_url_checked = True
+                try:
+                    quoted_url = resolve_threads_quoted_post_url(url)
+                except Exception as resolve_exc:
+                    logger.info("[user=%s] threads quoted post lookup failed: %s", user_id, resolve_exc)
+
+                if quoted_url:
+                    logger.info("[user=%s] threads quoted post found: %s", user_id, quoted_url)
+                    try:
+                        filepath = download_with_format(
+                            quoted_url,
+                            outtmpl,
+                            is_instagram,
+                            format_selector,
+                        )
+                        size = os.path.getsize(filepath)
+                        logger.info(
+                            "[user=%s] attempt=%s quoted post downloaded %.1f MB",
+                            user_id,
+                            attempt_index,
+                            size / 1024 / 1024,
+                        )
+                        if size <= MAX_FILE_SIZE:
+                            return filepath
+
+                        oversize_detected = True
+                        os.remove(filepath)
+                        continue
+                    except Exception as quoted_exc:
+                        exc = quoted_exc
+
             if platform == "threads" and is_threads_no_video_error(exc):
                 fallback_path = f"{DOWNLOAD_DIR}/video_{user_id}_{unique_id}_fallback.mp4"
                 try:
