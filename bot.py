@@ -138,6 +138,12 @@ def is_allowed(user_id: int) -> tuple[bool, Optional[int]]:
 
 def classify_download_error(exc: Exception, platform: str) -> Optional[UserFacingError]:
     message = str(exc)
+    if platform == "threads" and (
+        "HTTP Error 429" in message or "Too Many Requests" in message
+    ):
+        return UserFacingError(
+            "Threads временно ограничил запросы с сервера. Попробуй позже."
+        )
     if platform == "threads" and "has no downloadable video" in message:
         return UserFacingError("В этом Threads-посте нет видео для скачивания.")
     return None
