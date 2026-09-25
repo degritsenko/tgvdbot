@@ -169,8 +169,8 @@ def extract_threads_video_candidates(page: str) -> list[str]:
     return candidates
 
 
-def extract_threads_quoted_post_url(page: str, target_code: str) -> Optional[str]:
-    def find_quoted_url(value) -> Optional[str]:
+def extract_threads_nested_media(page: str, target_code: str) -> Optional[tuple[str, str]]:
+    def find_nested_media(value) -> Optional[tuple[str, str]]:
         if isinstance(value, dict):
             if value.get("code") == target_code:
                 text_info = value.get("text_post_app_info") or {}
@@ -178,15 +178,21 @@ def extract_threads_quoted_post_url(page: str, target_code: str) -> Optional[str
                 quoted_post = share_info.get("quoted_attachment_post") or {}
                 permalink = quoted_post.get("permalink")
                 if isinstance(permalink, str) and parse_platform(permalink) == "threads":
-                    return permalink
+                    return "post", permalink
+
+                linked_media = text_info.get("linked_inline_media") or {}
+                for version in linked_media.get("video_versions") or []:
+                    video_url = version.get("url")
+                    if isinstance(video_url, str) and is_threads_media_url(video_url):
+                        return "video", video_url
 
             for nested in value.values():
-                result = find_quoted_url(nested)
+                result = find_nested_media(nested)
                 if result:
                     return result
         elif isinstance(value, list):
             for nested in value:
-                result = find_quoted_url(nested)
+                result = find_nested_media(nested)
                 if result:
                     return result
         return None
@@ -196,13 +202,13 @@ def extract_threads_quoted_post_url(page: str, target_code: str) -> Optional[str
             data = json.loads(block)
         except (TypeError, ValueError):
             continue
-        result = find_quoted_url(data)
+        result = find_nested_media(data)
         if result:
             return result
     return None
 
 
-def resolve_threads_quoted_post_url(url: str) -> Optional[str]:
+def resolve_threads_nested_media(url: str) -> Optional[tuple[str, str]]:
     request = urllib.request.Request(url, headers={"User-Agent": THREADS_CRAWLER_USER_AGENT})
     with urllib.request.urlopen(request, timeout=30) as response:
         final_url = response.geturl()
@@ -211,7 +217,7 @@ def resolve_threads_quoted_post_url(url: str) -> Optional[str]:
     match = THREADS_POST_CODE_RE.search(final_url)
     if match is None:
         return None
-    return extract_threads_quoted_post_url(page, match.group(1))
+    return extract_threads_nested_media(page, match.group(1))
 
 
 def download_direct_url(url: str, filepath: str) -> str:
@@ -311,12 +317,12 @@ def download_video(url: str, user_id: int, platform: str) -> str:
 
     last_error: Optional[Exception] = None
     oversize_detected = False
-    quoted_url: Optional[str] = None
-    quoted_url_checked = False
+    nested_post_url: Optional[str] = None
+    nested_media_checked = False
     for attempt_index, format_selector in enumerate(format_attempts, start=1):
         outtmpl = f"{DOWNLOAD_DIR}/video_{user_id}_{unique_id}_a{attempt_index}.%(ext)s"
         filepath: Optional[str] = None
-        attempt_url = quoted_url or url
+        attempt_url = nested_post_url or url
 
         try:
             filepath = download_with_format(attempt_url, outtmpl, is_instagram, format_selector)
@@ -338,19 +344,21 @@ def download_video(url: str, user_id: int, platform: str) -> str:
                 platform == "threads"
                 and attempt_url == url
                 and is_threads_no_video_error(exc)
-                and not quoted_url_checked
+                and not nested_media_checked
             ):
-                quoted_url_checked = True
+                nested_media_checked = True
+                nested_media: Optional[tuple[str, str]] = None
                 try:
-                    quoted_url = resolve_threads_quoted_post_url(url)
+                    nested_media = resolve_threads_nested_media(url)
                 except Exception as resolve_exc:
-                    logger.info("[user=%s] threads quoted post lookup failed: %s", user_id, resolve_exc)
+                    logger.info("[user=%s] threads nested media lookup failed: %s", user_id, resolve_exc)
 
-                if quoted_url:
-                    logger.info("[user=%s] threads quoted post found: %s", user_id, quoted_url)
+                if nested_media and nested_media[0] == "post":
+                    nested_post_url = nested_media[1]
+                    logger.info("[user=%s] threads quoted post found: %s", user_id, nested_post_url)
                     try:
                         filepath = download_with_format(
-                            quoted_url,
+                            nested_post_url,
                             outtmpl,
                             is_instagram,
                             format_selector,
@@ -370,6 +378,26 @@ def download_video(url: str, user_id: int, platform: str) -> str:
                         continue
                     except Exception as quoted_exc:
                         exc = quoted_exc
+                elif nested_media and nested_media[0] == "video":
+                    linked_path = f"{DOWNLOAD_DIR}/video_{user_id}_{unique_id}_linked.mp4"
+                    logger.info("[user=%s] threads linked inline video found", user_id)
+                    try:
+                        filepath = download_direct_url(nested_media[1], linked_path)
+                        size = os.path.getsize(filepath)
+                        logger.info(
+                            "[user=%s] linked inline video downloaded %.1f MB",
+                            user_id,
+                            size / 1024 / 1024,
+                        )
+                        return filepath
+                    except UserFacingError:
+                        if os.path.exists(linked_path):
+                            os.remove(linked_path)
+                        raise
+                    except Exception as linked_exc:
+                        exc = linked_exc
+                        if os.path.exists(linked_path):
+                            os.remove(linked_path)
 
             if platform == "threads" and is_threads_no_video_error(exc):
                 fallback_path = f"{DOWNLOAD_DIR}/video_{user_id}_{unique_id}_fallback.mp4"
