@@ -8,6 +8,7 @@ services:
       TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN}"
       TZ: "${TZ:-Europe/Moscow}"
       INSTAGRAM_COOKIES: "/app/cookies/instagram.txt"
+      THREADS_COOKIES: "/app/cookies/threads.txt"
       MAX_PARALLEL_DOWNLOADS: "3"
       RATE_LIMIT_REQUESTS: "5"
       RATE_LIMIT_WINDOW: "60"

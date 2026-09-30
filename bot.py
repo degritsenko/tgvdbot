@@ -48,6 +48,7 @@ MAX_PARALLEL_DOWNLOADS = get_env_int("MAX_PARALLEL_DOWNLOADS", 3)
 RATE_LIMIT_REQUESTS = get_env_int("RATE_LIMIT_REQUESTS", 5)
 RATE_LIMIT_WINDOW = get_env_int("RATE_LIMIT_WINDOW", 60)
 INSTAGRAM_COOKIES = os.getenv("INSTAGRAM_COOKIES", "/app/cookies/instagram.txt")
+THREADS_COOKIES = os.getenv("THREADS_COOKIES", "/app/cookies/threads.txt")
 
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
@@ -275,7 +276,7 @@ def download_threads_fallback(url: str, filepath: str) -> Optional[str]:
 # =======================
 
 
-def build_ydl_opts(outtmpl: str, is_instagram: bool, format_selector: str) -> dict:
+def build_ydl_opts(outtmpl: str, platform: str, format_selector: str) -> dict:
     ydl_opts: dict = {
         "outtmpl": outtmpl,
         "format": format_selector,
@@ -289,14 +290,18 @@ def build_ydl_opts(outtmpl: str, is_instagram: bool, format_selector: str) -> di
         ),
     }
 
-    if is_instagram and os.path.exists(INSTAGRAM_COOKIES):
-        ydl_opts["cookiefile"] = INSTAGRAM_COOKIES
+    cookies_path = {
+        "instagram": INSTAGRAM_COOKIES,
+        "threads": THREADS_COOKIES,
+    }.get(platform)
+    if cookies_path and os.path.exists(cookies_path):
+        ydl_opts["cookiefile"] = cookies_path
 
     return ydl_opts
 
 
-def download_with_format(url: str, outtmpl: str, is_instagram: bool, format_selector: str) -> str:
-    ydl_opts = build_ydl_opts(outtmpl, is_instagram, format_selector)
+def download_with_format(url: str, outtmpl: str, platform: str, format_selector: str) -> str:
+    ydl_opts = build_ydl_opts(outtmpl, platform, format_selector)
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=True)
         return info.get("_filename") or ydl.prepare_filename(info)
@@ -304,7 +309,6 @@ def download_with_format(url: str, outtmpl: str, is_instagram: bool, format_sele
 
 def download_video(url: str, user_id: int, platform: str) -> str:
     unique_id = uuid4().hex
-    is_instagram = platform == "instagram"
 
     logger.info("[user=%s] download start platform=%s url=%s", user_id, platform, url)
 
@@ -331,7 +335,7 @@ def download_video(url: str, user_id: int, platform: str) -> str:
         attempt_url = nested_post_url or url
 
         try:
-            filepath = download_with_format(attempt_url, outtmpl, is_instagram, format_selector)
+            filepath = download_with_format(attempt_url, outtmpl, platform, format_selector)
             size = os.path.getsize(filepath)
             logger.info(
                 "[user=%s] attempt=%s downloaded %.1f MB",
@@ -366,7 +370,7 @@ def download_video(url: str, user_id: int, platform: str) -> str:
                         filepath = download_with_format(
                             nested_post_url,
                             outtmpl,
-                            is_instagram,
+                            platform,
                             format_selector,
                         )
                         size = os.path.getsize(filepath)

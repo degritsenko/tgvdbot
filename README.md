@@ -14,6 +14,7 @@ Built on `yt-dlp` with a Threads extractor plugin.
 - `TELEGRAM_BOT_TOKEN` (required)
 - `DOWNLOAD_DIR` (optional, default `downloads`)
 - `INSTAGRAM_COOKIES` (default `/app/cookies/instagram.txt`)
+- `THREADS_COOKIES` (default `/app/cookies/threads.txt`)
 - `MAX_FILE_SIZE` (optional, bytes, default `52428800`)
 - `MAX_PARALLEL_DOWNLOADS` (optional, default `3`)
 - `RATE_LIMIT_REQUESTS` (optional, default `5`)
@@ -40,9 +41,17 @@ Without cookies, Instagram usually returns login or rate-limit errors.
 3. Export cookies for `instagram.com`.
 4. Save file to `cookies/instagram.txt`.
 
+## Threads setup (cookies)
+Login-gated Threads posts require cookies.
+
+1. Install browser extension `Get cookies.txt`.
+2. Log in to `threads.com`.
+3. Export cookies for `threads.com`.
+4. Save file to `cookies/threads.txt`.
+
 ## docker-compose
 Use `docker-compose.yaml` and set `TELEGRAM_BOT_TOKEN` in your shell or `.env`.
 
 ## Threads support
 Threads downloads use the `yt-dlp-threads` extractor plugin.
-It supports public video posts and share links; private or login-gated posts are not supported.
+It supports public video posts and share links. Login-gated posts require `cookies/threads.txt`.
