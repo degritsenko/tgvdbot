@@ -196,6 +196,15 @@ def extract_threads_nested_media(page: str, target_code: str) -> Optional[tuple[
                     if isinstance(video_url, str) and is_threads_media_url(video_url):
                         return "video", video_url
 
+                if linked_media.get("media_type") == 2:
+                    preview = text_info.get("link_preview_attachment") or {}
+                    instagram_url = preview.get("url")
+                    if isinstance(instagram_url, str) and parse_platform(instagram_url) == "instagram":
+                        return "post", instagram_url
+                    code = linked_media.get("code")
+                    if isinstance(code, str) and re.fullmatch(r"[\w-]+", code):
+                        return "post", f"https://www.instagram.com/reel/{code}/"
+
             for nested in value.values():
                 result = find_nested_media(nested)
                 if result:
@@ -218,7 +227,7 @@ def extract_threads_nested_media(page: str, target_code: str) -> Optional[tuple[
     return None
 
 
-def fetch_threads_page(url: str) -> tuple[str, str]:
+def fetch_threads_page(url: str, crawler: bool = False) -> tuple[str, str]:
     cookies = http.cookiejar.MozillaCookieJar()
     if os.path.isfile(THREADS_COOKIES):
         cookies.load(THREADS_COOKIES, ignore_discard=True, ignore_expires=True)
@@ -226,7 +235,7 @@ def fetch_threads_page(url: str) -> tuple[str, str]:
     user_agent = (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        if cookies else THREADS_CRAWLER_USER_AGENT
+        if cookies and not crawler else THREADS_CRAWLER_USER_AGENT
     )
     request = urllib.request.Request(url, headers={"User-Agent": user_agent})
     with opener.open(request, timeout=30) as response:
@@ -237,11 +246,17 @@ def fetch_threads_page(url: str) -> tuple[str, str]:
 
 def resolve_threads_nested_media(url: str) -> Optional[tuple[str, str]]:
     final_url, page = fetch_threads_page(url)
-
     match = THREADS_POST_CODE_RE.search(final_url)
-    if match is None:
-        return None
-    return extract_threads_nested_media(page, match.group(1))
+    result = extract_threads_nested_media(page, match.group(1)) if match else None
+    if result is not None:
+        return result
+    # The browser page can be a login shell even for a public post.
+    if os.path.isfile(THREADS_COOKIES):
+        final_url, page = fetch_threads_page(url, crawler=True)
+        match = THREADS_POST_CODE_RE.search(final_url)
+        if match:
+            return extract_threads_nested_media(page, match.group(1))
+    return None
 
 
 def download_direct_url(url: str, filepath: str) -> str:
@@ -347,7 +362,8 @@ def download_video(url: str, user_id: int, platform: str) -> str:
         attempt_url = nested_post_url or url
 
         try:
-            filepath = download_with_format(attempt_url, outtmpl, platform, format_selector)
+            attempt_platform = parse_platform(attempt_url) or platform
+            filepath = download_with_format(attempt_url, outtmpl, attempt_platform, format_selector)
             size = os.path.getsize(filepath)
             logger.info(
                 "[user=%s] attempt=%s downloaded %.1f MB",
@@ -380,12 +396,12 @@ def download_video(url: str, user_id: int, platform: str) -> str:
 
                 if nested_media and nested_media[0] == "post":
                     nested_post_url = nested_media[1]
-                    logger.info("[user=%s] threads quoted post found: %s", user_id, nested_post_url)
+                    logger.info("[user=%s] threads nested post found: %s", user_id, nested_post_url)
                     try:
                         filepath = download_with_format(
                             nested_post_url,
                             outtmpl,
-                            platform,
+                            parse_platform(nested_post_url) or platform,
                             format_selector,
                         )
                         size = os.path.getsize(filepath)
