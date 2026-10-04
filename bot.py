@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import re
+import struct
 import sys
 import shutil
 import tempfile
@@ -503,6 +504,66 @@ async def safe_edit_status(status_message, text: str):
         logger.warning("Failed to edit status message")
 
 
+def read_mp4_dimensions(filepath: str) -> Optional[tuple[int, int]]:
+    def boxes(file_obj, start, end):
+        position = start
+        while position + 8 <= end:
+            file_obj.seek(position)
+            header = file_obj.read(8)
+            if len(header) != 8:
+                return
+            size, kind = struct.unpack(">I4s", header)
+            header_size = 8
+            if size == 1:
+                extended = file_obj.read(8)
+                if len(extended) != 8:
+                    return
+                size = struct.unpack(">Q", extended)[0]
+                header_size = 16
+            elif size == 0:
+                size = end - position
+            if size < header_size or position + size > end:
+                return
+            yield kind, position + header_size, position + size
+            position += size
+
+    try:
+        with open(filepath, "rb") as file_obj:
+            for kind, start, end in boxes(file_obj, 0, os.fstat(file_obj.fileno()).st_size):
+                if kind != b"moov":
+                    continue
+                for kind, start, end in boxes(file_obj, start, end):
+                    if kind != b"trak":
+                        continue
+                    track_header = None
+                    is_video = False
+                    for kind, start, end in boxes(file_obj, start, end):
+                        if kind == b"tkhd" and end - start in (84, 96):
+                            file_obj.seek(start)
+                            track_header = file_obj.read(end - start)
+                        elif kind == b"mdia":
+                            for child, child_start, child_end in boxes(file_obj, start, end):
+                                if child == b"hdlr" and child_end - child_start >= 12:
+                                    file_obj.seek(child_start + 8)
+                                    is_video = file_obj.read(4) == b"vide"
+                    if not is_video or track_header is None:
+                        continue
+                    version = track_header[0]
+                    if version not in (0, 1):
+                        continue
+                    width, height = (round(value / 65536) for value in struct.unpack(">II", track_header[-8:]))
+                    # Track display dimensions include pixel aspect ratio; the matrix carries rotation.
+                    offset = 40 if version == 0 else 52
+                    a, b, _, c, d, *_ = struct.unpack(">9i", track_header[offset:offset + 36])
+                    if a == d == 0 and b != 0 and c != 0:
+                        width, height = height, width
+                    if 0 < width <= 65535 and 0 < height <= 65535:
+                        return width, height
+    except (OSError, ValueError, struct.error):
+        logger.warning("Could not read MP4 dimensions")
+    return None
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     del context
     if not update.message or not update.effective_user:
@@ -530,8 +591,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             filepath = await asyncio.to_thread(download_video, url, user_id, platform)
 
         await safe_edit_status(status, "Отправляю...")
+        dimensions = await asyncio.to_thread(read_mp4_dimensions, filepath)
+        video_options = {"supports_streaming": True}
+        if dimensions:
+            video_options.update(width=dimensions[0], height=dimensions[1])
+            logger.info("[user=%s] sending video dimensions=%sx%s", user_id, *dimensions)
         with open(filepath, "rb") as file_obj:
-            await update.message.reply_video(file_obj, supports_streaming=True)
+            await update.message.reply_video(file_obj, **video_options)
 
         logger.info("[user=%s] sent", user_id)
 
