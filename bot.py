@@ -1,10 +1,13 @@
 import asyncio
 import html
+import http.cookiejar
 import json
 import logging
 import os
 import re
 import sys
+import shutil
+import tempfile
 import time
 import urllib.request
 from collections import defaultdict
@@ -215,11 +218,25 @@ def extract_threads_nested_media(page: str, target_code: str) -> Optional[tuple[
     return None
 
 
-def resolve_threads_nested_media(url: str) -> Optional[tuple[str, str]]:
-    request = urllib.request.Request(url, headers={"User-Agent": THREADS_CRAWLER_USER_AGENT})
-    with urllib.request.urlopen(request, timeout=30) as response:
+def fetch_threads_page(url: str) -> tuple[str, str]:
+    cookies = http.cookiejar.MozillaCookieJar()
+    if os.path.isfile(THREADS_COOKIES):
+        cookies.load(THREADS_COOKIES, ignore_discard=True, ignore_expires=True)
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookies))
+    user_agent = (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        if cookies else THREADS_CRAWLER_USER_AGENT
+    )
+    request = urllib.request.Request(url, headers={"User-Agent": user_agent})
+    with opener.open(request, timeout=30) as response:
         final_url = response.geturl()
         page = response.read().decode("utf-8", errors="ignore")
+    return final_url, page
+
+
+def resolve_threads_nested_media(url: str) -> Optional[tuple[str, str]]:
+    final_url, page = fetch_threads_page(url)
 
     match = THREADS_POST_CODE_RE.search(final_url)
     if match is None:
@@ -250,18 +267,7 @@ def download_direct_url(url: str, filepath: str) -> str:
 
 
 def download_threads_fallback(url: str, filepath: str) -> Optional[str]:
-    request = urllib.request.Request(
-        url,
-        headers={
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/120.0.0.0 Safari/537.36"
-            )
-        },
-    )
-    with urllib.request.urlopen(request, timeout=30) as response:
-        page = response.read().decode("utf-8", errors="ignore")
+    _, page = fetch_threads_page(url)
 
     candidates = extract_threads_video_candidates(page)
     if len(candidates) != 1:
@@ -302,9 +308,15 @@ def build_ydl_opts(outtmpl: str, platform: str, format_selector: str) -> dict:
 
 def download_with_format(url: str, outtmpl: str, platform: str, format_selector: str) -> str:
     ydl_opts = build_ydl_opts(outtmpl, platform, format_selector)
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=True)
-        return info.get("_filename") or ydl.prepare_filename(info)
+    # yt-dlp saves cookies on close, including after failed extraction.
+    with tempfile.TemporaryDirectory(prefix="tgvdbot-cookies-") as temp_dir:
+        if "cookiefile" in ydl_opts:
+            cookie_copy = os.path.join(temp_dir, "cookies.txt")
+            shutil.copyfile(ydl_opts["cookiefile"], cookie_copy)
+            ydl_opts["cookiefile"] = cookie_copy
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            return info.get("_filename") or ydl.prepare_filename(info)
 
 
 def download_video(url: str, user_id: int, platform: str) -> str:
@@ -361,6 +373,9 @@ def download_video(url: str, user_id: int, platform: str) -> str:
                 try:
                     nested_media = resolve_threads_nested_media(url)
                 except Exception as resolve_exc:
+                    user_error = classify_download_error(resolve_exc, platform)
+                    if user_error is not None:
+                        raise user_error from resolve_exc
                     logger.info("[user=%s] threads nested media lookup failed: %s", user_id, resolve_exc)
 
                 if nested_media and nested_media[0] == "post":
@@ -422,6 +437,9 @@ def download_video(url: str, user_id: int, platform: str) -> str:
                         os.remove(fallback_path)
                     raise
                 except Exception as fallback_exc:
+                    user_error = classify_download_error(fallback_exc, platform)
+                    if user_error is not None:
+                        raise user_error from fallback_exc
                     logger.info("[user=%s] threads fallback failed: %s", user_id, fallback_exc)
                     if os.path.exists(fallback_path):
                         os.remove(fallback_path)
