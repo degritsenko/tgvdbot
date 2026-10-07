@@ -181,9 +181,25 @@ def extract_threads_video_candidates(page: str) -> list[str]:
 
 
 def extract_threads_nested_media(page: str, target_code: str) -> Optional[tuple[str, str]]:
+    def find_video(media) -> Optional[str]:
+        if not isinstance(media, dict):
+            return None
+        for version in media.get("video_versions") or []:
+            video_url = version.get("url")
+            if isinstance(video_url, str) and is_threads_media_url(video_url):
+                return video_url
+        for item in media.get("carousel_media") or []:
+            video_url = find_video(item)
+            if video_url:
+                return video_url
+        return None
+
     def find_nested_media(value) -> Optional[tuple[str, str]]:
         if isinstance(value, dict):
             if value.get("code") == target_code:
+                video_url = find_video(value)
+                if video_url:
+                    return "video", video_url
                 text_info = value.get("text_post_app_info") or {}
                 share_info = text_info.get("share_info") or {}
                 quoted_post = share_info.get("quoted_attachment_post") or {}
@@ -192,10 +208,9 @@ def extract_threads_nested_media(page: str, target_code: str) -> Optional[tuple[
                     return "post", permalink
 
                 linked_media = text_info.get("linked_inline_media") or {}
-                for version in linked_media.get("video_versions") or []:
-                    video_url = version.get("url")
-                    if isinstance(video_url, str) and is_threads_media_url(video_url):
-                        return "video", video_url
+                video_url = find_video(linked_media)
+                if video_url:
+                    return "video", video_url
 
                 if linked_media.get("media_type") == 2:
                     preview = text_info.get("link_preview_attachment") or {}
