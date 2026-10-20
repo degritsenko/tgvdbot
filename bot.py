@@ -598,6 +598,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Подожди {wait} сек.")
         return
 
+    if platform == "instagram" and urlparse(url).path.startswith("/reels/audio/"):
+        await update.message.reply_text(
+            "Это ссылка на аудиодорожку Instagram. Пришли ссылку на конкретный Reel: "
+            "открой видео и выбери «Поделиться → Копировать ссылку»."
+        )
+        return
+
     status = await update.message.reply_text("Загружаю...")
     filepath: Optional[str] = None
 
