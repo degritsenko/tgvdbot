@@ -18,6 +18,7 @@ from uuid import uuid4
 
 import yt_dlp
 from telegram import Update
+from telegram.error import BadRequest, NetworkError, RetryAfter
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -519,6 +520,24 @@ async def safe_edit_status(status_message, text: str):
         logger.warning("Failed to edit status message")
 
 
+def log_telegram_error(error: Exception):
+    if isinstance(error, RetryAfter):
+        logger.warning("Telegram rate limit; retry after %s seconds", error.retry_after)
+    elif isinstance(error, NetworkError) and not isinstance(error, BadRequest):
+        cause = error.__cause__
+        logger.warning(
+            "Temporary Telegram network error: %s (cause=%s)",
+            type(error).__name__,
+            type(cause).__name__ if cause else "unavailable",
+        )
+    else:
+        logger.error("Unexpected Telegram error", exc_info=(type(error), error, error.__traceback__))
+
+
+async def on_telegram_error(update: object, context: ContextTypes.DEFAULT_TYPE):
+    log_telegram_error(context.error)
+
+
 def read_mp4_dimensions(filepath: str) -> Optional[tuple[int, int]]:
     def boxes(file_obj, start, end):
         position = start
@@ -626,6 +645,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except UserFacingError as exc:
         logger.info("[user=%s] user-facing error: %s", user_id, exc)
         await safe_edit_status(status, str(exc))
+    except (NetworkError, RetryAfter) as exc:
+        log_telegram_error(exc)
+        await safe_edit_status(
+            status,
+            "Telegram не смог обработать запрос. Попробуй позже."
+            if isinstance(exc, BadRequest)
+            else "Не удалось связаться с Telegram. Попробуй позже.",
+        )
     except Exception:
         logger.exception("[user=%s] unexpected error", user_id)
         await safe_edit_status(status, "Не удалось скачать видео. Попробуй другую ссылку позже.")
@@ -643,6 +670,7 @@ def main():
     logger.info("Bot started")
 
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
+    app.add_error_handler(on_telegram_error)
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
