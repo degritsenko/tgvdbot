@@ -338,6 +338,23 @@ def build_ydl_opts(outtmpl: str, platform: str, format_selector: str) -> dict:
     return ydl_opts
 
 
+def select_instagram_video(info: dict) -> Optional[dict]:
+    if info.get("_type") in {"playlist", "multi_video"}:
+        for entry in info.get("entries") or []:
+            if isinstance(entry, dict):
+                video = select_instagram_video(entry)
+                if video is not None:
+                    return video
+        return None
+    image_extensions = {"jpg", "jpeg", "png", "webp", "avif", "gif"}
+    if any(
+        fmt.get("vcodec") != "none" and fmt.get("ext") not in image_extensions
+        for fmt in info.get("formats") or []
+    ):
+        return info
+    return None
+
+
 def download_with_format(url: str, outtmpl: str, platform: str, format_selector: str) -> str:
     ydl_opts = build_ydl_opts(outtmpl, platform, format_selector)
     # yt-dlp saves cookies on close, including after failed extraction.
@@ -347,7 +364,15 @@ def download_with_format(url: str, outtmpl: str, platform: str, format_selector:
             shutil.copyfile(ydl_opts["cookiefile"], cookie_copy)
             ydl_opts["cookiefile"] = cookie_copy
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
+            if platform == "instagram":
+                info = ydl.extract_info(url, download=False, process=False)
+                if info.get("_type") in {"playlist", "multi_video"}:
+                    info = select_instagram_video(info)
+                    if info is None:
+                        raise UserFacingError("В этом Instagram-посте нет доступного видео для скачивания.")
+                info = ydl.process_ie_result(info, download=True)
+            else:
+                info = ydl.extract_info(url, download=True)
             return info.get("_filename") or ydl.prepare_filename(info)
 
 
@@ -394,6 +419,8 @@ def download_video(url: str, user_id: int, platform: str) -> str:
 
             oversize_detected = True
             os.remove(filepath)
+        except UserFacingError:
+            raise
         except Exception as exc:
             if (
                 platform == "threads"
