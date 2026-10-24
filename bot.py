@@ -144,6 +144,10 @@ def is_allowed(user_id: int) -> tuple[bool, Optional[int]]:
 
 def classify_download_error(exc: Exception, platform: str) -> Optional[UserFacingError]:
     message = str(exc)
+    if platform == "instagram" and (
+        "No video formats found" in message or "There is no video in this post" in message
+    ):
+        return UserFacingError("В этом Instagram-посте нет доступного видео для скачивания.")
     if platform == "threads" and (
         "HTTP Error 429" in message or "Too Many Requests" in message
     ):
@@ -366,10 +370,9 @@ def download_with_format(url: str, outtmpl: str, platform: str, format_selector:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             if platform == "instagram":
                 info = ydl.extract_info(url, download=False, process=False)
-                if info.get("_type") in {"playlist", "multi_video"}:
-                    info = select_instagram_video(info)
-                    if info is None:
-                        raise UserFacingError("В этом Instagram-посте нет доступного видео для скачивания.")
+                info = select_instagram_video(info)
+                if info is None:
+                    raise UserFacingError("В этом Instagram-посте нет доступного видео для скачивания.")
                 info = ydl.process_ie_result(info, download=True)
             else:
                 info = ydl.extract_info(url, download=True)
