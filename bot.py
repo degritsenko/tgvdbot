@@ -60,6 +60,7 @@ os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 X_HOSTS = {"twitter.com", "www.twitter.com", "x.com", "www.x.com", "t.co"}
 INSTAGRAM_HOSTS = {"instagram.com", "www.instagram.com", "m.instagram.com"}
 THREADS_HOSTS = {"threads.com", "www.threads.com", "threads.net", "www.threads.net"}
+FACEBOOK_HOSTS = {"facebook.com", "www.facebook.com", "m.facebook.com", "web.facebook.com", "mbasic.facebook.com", "fb.watch", "www.fb.watch"}
 
 # =======================
 # LOGGING
@@ -127,6 +128,8 @@ def parse_platform(url: str) -> Optional[str]:
         return "threads"
     if host in X_HOSTS:
         return "x"
+    if host in FACEBOOK_HOSTS:
+        return "facebook"
     return None
 
 
@@ -144,6 +147,15 @@ def is_allowed(user_id: int) -> tuple[bool, Optional[int]]:
 
 def classify_download_error(exc: Exception, platform: str) -> Optional[UserFacingError]:
     message = str(exc)
+    if platform == "facebook" and (
+        "Cannot parse data" in message
+        or "No video formats found" in message
+        or "login required" in message.lower()
+        or "Cannot retrieve video" in message
+    ):
+        return UserFacingError(
+            "Не удалось получить видео Facebook. Возможно, ролик закрыт или требует входа в аккаунт."
+        )
     if platform == "x" and "No video could be found in this tweet" in message:
         return UserFacingError(
             "Загрузчик не нашёл доступного видео в этом посте X. "
@@ -343,6 +355,8 @@ def build_ydl_opts(outtmpl: str, platform: str, format_selector: str) -> dict:
     }.get(platform)
     if cookies_path and os.path.exists(cookies_path):
         ydl_opts["cookiefile"] = cookies_path
+    if platform == "facebook":
+        ydl_opts["user_agent"] = "Mozilla/5.0"
 
     return ydl_opts
 
@@ -364,7 +378,24 @@ def select_instagram_video(info: dict) -> Optional[dict]:
     return None
 
 
+def resolve_facebook_url(url: str) -> str:
+    parsed = urlparse(url)
+    if not parsed.path.startswith("/share/") and parsed.hostname not in {"fb.watch", "www.fb.watch"}:
+        return url
+    request = urllib.request.Request(url, headers={
+        "User-Agent": "Mozilla/5.0",
+    })
+    with urllib.request.urlopen(request, timeout=30) as response:
+        final_url = response.geturl()
+    final = urlparse(final_url)
+    if parse_platform(final_url) != "facebook" or final.path.startswith(("/share/", "/login", "/checkpoint")):
+        raise UserFacingError("Не удалось открыть ссылку Facebook. Пришли прямую ссылку на публичный Reel.")
+    return final_url
+
+
 def download_with_format(url: str, outtmpl: str, platform: str, format_selector: str) -> str:
+    if platform == "facebook":
+        url = resolve_facebook_url(url)
     ydl_opts = build_ydl_opts(outtmpl, platform, format_selector)
     # yt-dlp saves cookies on close, including after failed extraction.
     with tempfile.TemporaryDirectory(prefix="tgvdbot-cookies-") as temp_dir:
@@ -543,7 +574,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await update.message.reply_text(
-        "Пришли ссылку на X (Twitter), Instagram Reel или Threads, пришлю видео.\n"
+        "Пришли ссылку на X (Twitter), Instagram Reel, Threads или Facebook Reel, пришлю видео.\n"
         "Видео больше 50 МБ не поддерживаются."
     )
 
