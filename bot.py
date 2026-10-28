@@ -144,6 +144,11 @@ def is_allowed(user_id: int) -> tuple[bool, Optional[int]]:
 
 def classify_download_error(exc: Exception, platform: str) -> Optional[UserFacingError]:
     message = str(exc)
+    if platform == "x" and "No video could be found in this tweet" in message:
+        return UserFacingError(
+            "Загрузчик не нашёл доступного видео в этом посте X. "
+            "Возможно, там только картинки или доступ к видео ограничен."
+        )
     if platform == "instagram" and (
         "No video formats found" in message or "There is no video in this post" in message
     ):
