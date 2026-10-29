@@ -1,6 +1,8 @@
 import asyncio
 import html
+import http.client
 import http.cookiejar
+import ipaddress
 import json
 import logging
 import os
@@ -8,8 +10,10 @@ import re
 import struct
 import sys
 import shutil
+import socket
 import tempfile
 import time
+import traceback
 import urllib.request
 from collections import defaultdict
 from typing import Optional
@@ -54,6 +58,12 @@ RATE_LIMIT_REQUESTS = get_env_int("RATE_LIMIT_REQUESTS", 5)
 RATE_LIMIT_WINDOW = get_env_int("RATE_LIMIT_WINDOW", 60)
 INSTAGRAM_COOKIES = os.getenv("INSTAGRAM_COOKIES", "/app/cookies/instagram.txt")
 THREADS_COOKIES = os.getenv("THREADS_COOKIES", "/app/cookies/threads.txt")
+try:
+    ALLOWED_USER_IDS = {int(value.strip()) for value in os.getenv("ALLOWED_USER_IDS", "").split(",") if value.strip()}
+    if any(value <= 0 for value in ALLOWED_USER_IDS):
+        raise ValueError
+except ValueError:
+    raise RuntimeError("ALLOWED_USER_IDS должен содержать положительные числовые ID через запятую") from None
 
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
@@ -66,10 +76,17 @@ FACEBOOK_HOSTS = {"facebook.com", "www.facebook.com", "m.facebook.com", "web.fac
 # LOGGING
 # =======================
 
+class SafeLogFormatter(logging.Formatter):
+    def formatException(self, exc_info):
+        return "".join(traceback.format_tb(exc_info[2])) + f"{exc_info[0].__name__}: details suppressed"
+
+
+log_handler = logging.StreamHandler(sys.stdout)
+log_handler.setFormatter(SafeLogFormatter("%(asctime)s - %(levelname)s - %(message)s"))
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)],
+    handlers=[log_handler],
 )
 logger = logging.getLogger(__name__)
 
@@ -88,6 +105,42 @@ LAST_REQUESTS: dict[int, list[float]] = defaultdict(list)
 
 class UserFacingError(Exception):
     pass
+
+
+class SafeYDLLogger:
+    def debug(self, message):
+        pass
+
+    def warning(self, message):
+        logger.warning("yt-dlp warning (sensitive details suppressed)")
+
+    def error(self, message):
+        logger.warning("yt-dlp extraction failed (sensitive details suppressed)")
+
+
+def validate_cookie_file(path: str):
+    try:
+        with open(path, encoding="utf-8") as file_obj:
+            for line_number, line in enumerate(file_obj, start=1):
+                line = line.rstrip("\r\n")
+                if not line or (line.startswith("#") and not line.startswith("#HttpOnly_")):
+                    continue
+                fields = line.removeprefix("#HttpOnly_").split("\t")
+                valid = len(fields) == 7
+                if valid:
+                    domain, include_subdomains, cookie_path, secure, expires, name, value = fields
+                    valid = (
+                        bool(domain) and not any(char.isspace() for char in domain)
+                        and include_subdomains in {"TRUE", "FALSE"}
+                        and domain.startswith(".") == (include_subdomains == "TRUE")
+                        and cookie_path.startswith("/") and secure in {"TRUE", "FALSE"}
+                        and (not expires or (expires.isascii() and expires.isdecimal() and len(expires) <= 20))
+                        and bool(name)
+                    )
+                if not valid:
+                    raise UserFacingError(f"Некорректный формат {os.path.basename(path)}, строка {line_number}. Нужен экспорт cookies в формате Netscape с табуляциями.")
+    except (OSError, UnicodeError):
+        raise UserFacingError(f"Не удалось прочитать cookie-файл {os.path.basename(path)}.") from None
 
 
 # =======================
@@ -181,11 +234,55 @@ def is_threads_no_video_error(exc: Exception) -> bool:
 
 
 def is_threads_media_url(url: str) -> bool:
-    parsed = urlparse(url)
-    host = (parsed.hostname or "").lower()
-    if host == "static.cdninstagram.com":
+    try:
+        parsed = urlparse(url)
+        host = (parsed.hostname or "").lower()
+        if parsed.scheme != "https" or parsed.username or parsed.password or parsed.port not in {None, 443}:
+            return False
+    except ValueError:
         return False
-    return "cdninstagram.com" in host or "fbcdn.net" in host
+    return host != "static.cdninstagram.com" and any(
+        host == domain or host.endswith("." + domain) for domain in ("cdninstagram.com", "fbcdn.net")
+    )
+
+
+def validate_media_destination(url: str):
+    if not is_threads_media_url(url):
+        raise UserFacingError("Небезопасный адрес видео отклонён.")
+    addresses = socket.getaddrinfo(urlparse(url).hostname, 443, type=socket.SOCK_STREAM)
+    if not addresses or any(not ipaddress.ip_address(item[4][0]).is_global for item in addresses):
+        raise UserFacingError("Небезопасный адрес видео отклонён.")
+
+
+class SafeMediaRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        validate_media_destination(newurl)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def create_public_connection(address, timeout=socket._GLOBAL_DEFAULT_TIMEOUT, source_address=None):
+    addresses = socket.getaddrinfo(address[0], address[1], type=socket.SOCK_STREAM)
+    if not addresses or any(not ipaddress.ip_address(item[4][0]).is_global for item in addresses):
+        raise UserFacingError("Небезопасный адрес видео отклонён.")
+    last_error = None
+    for item in addresses:
+        try:
+            # Connect to the validated numeric address; keep TLS validation on the original hostname.
+            return socket.create_connection((item[4][0], address[1]), timeout, source_address)
+        except OSError as exc:
+            last_error = exc
+    raise last_error
+
+
+class SafeMediaHTTPSConnection(http.client.HTTPSConnection):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._create_connection = create_public_connection
+
+
+class SafeMediaHTTPSHandler(urllib.request.HTTPSHandler):
+    def https_open(self, req):
+        return self.do_open(SafeMediaHTTPSConnection, req, context=self._context)
 
 
 def extract_threads_video_candidates(page: str) -> list[str]:
@@ -268,6 +365,7 @@ def extract_threads_nested_media(page: str, target_code: str) -> Optional[tuple[
 def fetch_threads_page(url: str, crawler: bool = False) -> tuple[str, str]:
     cookies = http.cookiejar.MozillaCookieJar()
     if os.path.isfile(THREADS_COOKIES):
+        validate_cookie_file(THREADS_COOKIES)
         cookies.load(THREADS_COOKIES, ignore_discard=True, ignore_expires=True)
     opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookies))
     user_agent = (
@@ -298,6 +396,10 @@ def resolve_threads_nested_media(url: str) -> Optional[tuple[str, str]]:
 
 
 def download_direct_url(url: str, filepath: str) -> str:
+    validate_media_destination(url)
+    opener = urllib.request.build_opener(
+        urllib.request.ProxyHandler({}), SafeMediaRedirectHandler(), SafeMediaHTTPSHandler(),
+    )
     request = urllib.request.Request(
         url,
         headers={
@@ -308,7 +410,7 @@ def download_direct_url(url: str, filepath: str) -> str:
             )
         },
     )
-    with urllib.request.urlopen(request, timeout=30) as response, open(filepath, "wb") as file_obj:
+    with opener.open(request, timeout=30) as response, open(filepath, "wb") as file_obj:
         while True:
             chunk = response.read(1024 * 1024)
             if not chunk:
@@ -342,6 +444,7 @@ def build_ydl_opts(outtmpl: str, platform: str, format_selector: str) -> dict:
         "merge_output_format": "mp4",
         "noplaylist": True,
         "quiet": True,
+        "logger": SafeYDLLogger(),
         "user_agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
             "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -402,6 +505,8 @@ def download_with_format(url: str, outtmpl: str, platform: str, format_selector:
         if "cookiefile" in ydl_opts:
             cookie_copy = os.path.join(temp_dir, "cookies.txt")
             shutil.copyfile(ydl_opts["cookiefile"], cookie_copy)
+            os.chmod(cookie_copy, 0o600)
+            validate_cookie_file(cookie_copy)
             ydl_opts["cookiefile"] = cookie_copy
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             if platform == "instagram":
@@ -475,7 +580,7 @@ def download_video(url: str, user_id: int, platform: str) -> str:
                     user_error = classify_download_error(resolve_exc, platform)
                     if user_error is not None:
                         raise user_error from resolve_exc
-                    logger.info("[user=%s] threads nested media lookup failed: %s", user_id, resolve_exc)
+                    logger.info("[user=%s] threads nested media lookup failed: %s", user_id, type(resolve_exc).__name__)
 
                 if nested_media and nested_media[0] == "post":
                     nested_post_url = nested_media[1]
@@ -539,7 +644,7 @@ def download_video(url: str, user_id: int, platform: str) -> str:
                     user_error = classify_download_error(fallback_exc, platform)
                     if user_error is not None:
                         raise user_error from fallback_exc
-                    logger.info("[user=%s] threads fallback failed: %s", user_id, fallback_exc)
+                    logger.info("[user=%s] threads fallback failed: %s", user_id, type(fallback_exc).__name__)
                     if os.path.exists(fallback_path):
                         os.remove(fallback_path)
 
@@ -557,7 +662,7 @@ def download_video(url: str, user_id: int, platform: str) -> str:
         raise UserFacingError("Видео больше лимита Telegram (50 МБ)")
 
     if last_error is not None:
-        logger.info("[user=%s] all attempts failed: %s", user_id, last_error)
+        logger.info("[user=%s] all attempts failed: %s", user_id, type(last_error).__name__)
         raise last_error
 
     raise UserFacingError("Не удалось скачать видео.")
@@ -676,6 +781,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     platform = parse_platform(url)
     if platform is None:
+        return
+
+    if ALLOWED_USER_IDS and (
+        user_id not in ALLOWED_USER_IDS
+        or update.effective_chat is None
+        or update.effective_chat.type != "private"
+    ):
+        await update.message.reply_text("Доступ ограничен. Обратись к владельцу бота в личном чате.")
         return
 
     allowed, wait = is_allowed(user_id)

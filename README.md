@@ -15,6 +15,7 @@ Built on `yt-dlp` with a Threads extractor plugin.
 - `DOWNLOAD_DIR` (optional, default `downloads`)
 - `INSTAGRAM_COOKIES` (default `/app/cookies/instagram.txt`)
 - `THREADS_COOKIES` (default `/app/cookies/threads.txt`)
+- `ALLOWED_USER_IDS` (optional, comma-separated Telegram user IDs; empty means public access)
 - `MAX_FILE_SIZE` (optional, bytes, default `52428800`)
 - `MAX_PARALLEL_DOWNLOADS` (optional, default `3`)
 - `RATE_LIMIT_REQUESTS` (optional, default `5`)
@@ -51,6 +52,14 @@ Login-gated Threads posts require cookies.
 
 ## docker-compose
 Use `docker-compose.yaml` and set `TELEGRAM_BOT_TOKEN` in your shell or `.env`.
+
+## Account access and secrets
+Cookie files must use Netscape format with tab-separated fields. Invalid files are rejected without logging their contents.
+Cookies are mounted read-only; temporary copies use permissions `0600` and are removed after extraction.
+
+By default the bot is public. Users can request content accessible to the Instagram/Threads account represented by its cookies.
+To limit access, set `ALLOWED_USER_IDS=123456789,987654321`. When configured, downloads are allowed only for these users in private chats.
+For a public bot, use a separate social account without private subscriptions. Do not commit cookie files or `.env`.
 
 ## Threads support
 Threads downloads use the `yt-dlp-threads` extractor plugin.

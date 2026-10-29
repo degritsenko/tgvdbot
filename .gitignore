@@ -11,5 +11,8 @@ downloads/
 *.log
 
 # Local secrets / session data
+.env
+.env.*
+!.env.example
 cookies/*.txt
 !cookies/.gitkeep

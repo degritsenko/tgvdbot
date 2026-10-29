@@ -1,0 +1,10 @@
+.git
+.env
+.env.*
+cookies/
+downloads/
+tests/
+__pycache__/
+*.py[cod]
+*.log
+.DS_Store
