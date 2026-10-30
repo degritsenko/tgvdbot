@@ -76,9 +76,59 @@ FACEBOOK_HOSTS = {"facebook.com", "www.facebook.com", "m.facebook.com", "web.fac
 # LOGGING
 # =======================
 
+def safe_error_summary(error) -> str:
+    pending = [error]
+    seen = set()
+    messages = []
+    statuses = []
+    while pending and len(seen) < 8:
+        current = pending.pop(0)
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        messages.append(str(current).lower())
+        if isinstance(current, BaseException):
+            for attribute in ("status", "status_code", "code"):
+                status = getattr(current, attribute, None)
+                if isinstance(status, int) and 100 <= status <= 599:
+                    statuses.append(status)
+            for attribute in ("__cause__", "__context__", "cause"):
+                cause = getattr(current, attribute, None)
+                if isinstance(cause, BaseException):
+                    pending.append(cause)
+            exc_info = getattr(current, "exc_info", None)
+            if isinstance(exc_info, tuple) and len(exc_info) > 1 and isinstance(exc_info[1], BaseException):
+                pending.append(exc_info[1])
+    text = " ".join(messages)
+    statuses.extend(int(match) for match in re.findall(
+        r"\bhttp(?:\s+error|\s+status(?:\s+code)?)?[\s:]+([1-5]\d{2})\b", text,
+    ))
+    http_status = statuses[0] if statuses else None
+    rules = (
+        ("rate_limited", 429 in statuses or "too many requests" in text),
+        ("cookies_invalid", "cookies are no longer valid" in text or "invalid cookies" in text),
+        ("checkpoint_required", "checkpoint" in text or "challenge_required" in text),
+        ("access_restricted", "rate-limit reached or login required" in text),
+        ("login_required", 401 in statuses or any(term in text for term in (
+            "you need to log in", "login required", "login_required", "login page", "log in to access",
+        ))),
+        ("empty_media_response", "empty media response" in text),
+        ("format_unavailable", "requested format is not available" in text),
+        ("no_video", any(term in text for term in ("no video formats found", "no video could be found", "has no downloadable video", "there is no video"))),
+        ("content_unavailable", any(term in text for term in ("not available", "not found", "deleted", "private video"))),
+        ("network_timeout", "timed out" in text or "timeout" in text),
+        ("http_error", bool(statuses)),
+        ("extraction_failed", "unable to extract" in text or "extraction failed" in text or "cannot parse data" in text),
+    )
+    category = next((name for name, matches in rules if matches), "unknown")
+    error_type = type(error).__name__ if isinstance(error, BaseException) else "diagnostic"
+    # Only fixed categories, HTTP codes and exception types leave this function.
+    return f"category={category} http={http_status or 'none'} error={error_type}"
+
+
 class SafeLogFormatter(logging.Formatter):
     def formatException(self, exc_info):
-        return "".join(traceback.format_tb(exc_info[2])) + f"{exc_info[0].__name__}: details suppressed"
+        return "".join(traceback.format_tb(exc_info[2])) + safe_error_summary(exc_info[1])
 
 
 log_handler = logging.StreamHandler(sys.stdout)
@@ -112,10 +162,10 @@ class SafeYDLLogger:
         pass
 
     def warning(self, message):
-        logger.warning("yt-dlp warning (sensitive details suppressed)")
+        logger.warning("yt-dlp warning: %s", safe_error_summary(message))
 
     def error(self, message):
-        logger.warning("yt-dlp extraction failed (sensitive details suppressed)")
+        logger.warning("yt-dlp extraction failed: %s", safe_error_summary(message))
 
 
 def validate_cookie_file(path: str):
@@ -580,7 +630,7 @@ def download_video(url: str, user_id: int, platform: str) -> str:
                     user_error = classify_download_error(resolve_exc, platform)
                     if user_error is not None:
                         raise user_error from resolve_exc
-                    logger.info("[user=%s] threads nested media lookup failed: %s", user_id, type(resolve_exc).__name__)
+                    logger.info("[user=%s] threads nested media lookup failed: %s", user_id, safe_error_summary(resolve_exc))
 
                 if nested_media and nested_media[0] == "post":
                     nested_post_url = nested_media[1]
@@ -644,7 +694,7 @@ def download_video(url: str, user_id: int, platform: str) -> str:
                     user_error = classify_download_error(fallback_exc, platform)
                     if user_error is not None:
                         raise user_error from fallback_exc
-                    logger.info("[user=%s] threads fallback failed: %s", user_id, type(fallback_exc).__name__)
+                    logger.info("[user=%s] threads fallback failed: %s", user_id, safe_error_summary(fallback_exc))
                     if os.path.exists(fallback_path):
                         os.remove(fallback_path)
 
@@ -656,13 +706,13 @@ def download_video(url: str, user_id: int, platform: str) -> str:
                 raise user_error
 
             last_error = exc
-            logger.info("[user=%s] attempt=%s failed", user_id, attempt_index)
+            logger.info("[user=%s] attempt=%s failed: %s", user_id, attempt_index, safe_error_summary(exc))
 
     if oversize_detected:
         raise UserFacingError("Видео больше лимита Telegram (50 МБ)")
 
     if last_error is not None:
-        logger.info("[user=%s] all attempts failed: %s", user_id, type(last_error).__name__)
+        logger.info("[user=%s] all attempts failed: %s", user_id, safe_error_summary(last_error))
         raise last_error
 
     raise UserFacingError("Не удалось скачать видео.")
