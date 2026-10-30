@@ -34,8 +34,8 @@ docker run -d \
 ```
 
 ## Instagram setup (cookies)
-Instagram Reels require cookies for reliable downloads.
-Without cookies, Instagram usually returns login or rate-limit errors.
+Instagram cookies are required for Stories and login-gated content.
+Public posts and Reels are tried without cookies first; configured cookies are used if authentication is required. Stories use configured cookies directly.
 
 1. Install browser extension `Get cookies.txt`.
 2. Log in to `instagram.com`.

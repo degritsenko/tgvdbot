@@ -592,9 +592,30 @@ def resolve_facebook_url(url: str) -> str:
 
 
 def download_with_format(url: str, outtmpl: str, platform: str, format_selector: str) -> str:
+    public_instagram = platform == "instagram" and not urlparse(url).path.startswith("/stories/")
+    if not public_instagram:
+        return _download_with_format(url, outtmpl, platform, format_selector)
+    try:
+        return _download_with_format(url, outtmpl, platform, format_selector, use_cookies=False)
+    except UserFacingError:
+        raise
+    except Exception as exc:
+        summary = safe_error_summary(exc)
+        needs_auth = any("category=" + category + " " in summary for category in (
+            "login_required", "access_restricted", "empty_media_response",
+        )) or "only available for registered users" in str(exc).lower()
+        if not needs_auth or not os.path.isfile(INSTAGRAM_COOKIES):
+            raise
+        logger.info("Instagram requires authentication; retrying with configured cookies")
+        return _download_with_format(url, outtmpl, platform, format_selector)
+
+
+def _download_with_format(url: str, outtmpl: str, platform: str, format_selector: str, use_cookies: bool = True) -> str:
     if platform == "facebook":
         url = resolve_facebook_url(url)
     ydl_opts = build_ydl_opts(outtmpl, platform, format_selector)
+    if not use_cookies:
+        ydl_opts.pop("cookiefile", None)
     # yt-dlp saves cookies on close, including after failed extraction.
     with tempfile.TemporaryDirectory(prefix="tgvdbot-cookies-") as temp_dir:
         if "cookiefile" in ydl_opts:
