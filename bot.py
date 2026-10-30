@@ -17,7 +17,7 @@ import traceback
 import urllib.request
 from collections import defaultdict
 from typing import Optional
-from urllib.parse import urlparse
+from urllib.parse import quote, unquote, urlparse
 from uuid import uuid4
 
 import yt_dlp
@@ -157,18 +157,60 @@ class UserFacingError(Exception):
     pass
 
 
+def normalize_diagnostic_text(text):
+    text = str(text)
+    for _ in range(8):
+        decoded = unquote(text)
+        if decoded == text:
+            break
+        text = decoded
+    else:
+        text = re.sub(r"\S*%[0-9A-Fa-f]{2}\S*", "[encoded value omitted]", text)
+    text = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", text)
+    text = "".join(char for char in text if char.isprintable() or char in "\r\n")
+    return re.sub(r"%[0-9A-Fa-f]{2}", lambda match: match.group(0).upper(), text)
+
+
 class SafeYDLLogger:
+    def __init__(self):
+        self.secret_values = set()
+        self.add_secrets((TELEGRAM_BOT_TOKEN,))
+
+    def add_secrets(self, values):
+        for value in values:
+            if value:
+                self.secret_values.update(
+                    normalized for variant in (value, unquote(value), quote(value, safe=""))
+                    if (normalized := normalize_diagnostic_text(variant))
+                )
+
+    def diagnostic(self, message):
+        summary = safe_error_summary(message)
+        if "category=unknown " not in summary:
+            return summary
+        text = normalize_diagnostic_text(message)
+        if re.search(r"cookie|session|csrf|authorization|bearer|password|token|secret|credential", text, re.IGNORECASE):
+            return summary + " detail=[credential-related diagnostic omitted]"
+        for value in sorted(self.secret_values, key=len, reverse=True):
+            text = text.replace(value, "[redacted]")
+        text = re.sub(r"https?://[^\s<>\"']+", "[URL]", text)
+        text = re.sub(r"(['\"])(.*?)\1", "[quoted value]", text)
+        text = re.sub(r"[A-Za-z0-9_%+=./-]{24,}", "[redacted value]", text)
+        first_line = text.splitlines()[0] if text.splitlines() else ""
+        return summary + " detail=" + first_line[:240]
+
     def debug(self, message):
         pass
 
     def warning(self, message):
-        logger.warning("yt-dlp warning: %s", safe_error_summary(message))
+        logger.warning("yt-dlp warning: %s", self.diagnostic(message))
 
     def error(self, message):
-        logger.warning("yt-dlp extraction failed: %s", safe_error_summary(message))
+        logger.warning("yt-dlp extraction failed: %s", self.diagnostic(message))
 
 
 def validate_cookie_file(path: str):
+    secret_values = set()
     try:
         with open(path, encoding="utf-8") as file_obj:
             for line_number, line in enumerate(file_obj, start=1):
@@ -189,8 +231,11 @@ def validate_cookie_file(path: str):
                     )
                 if not valid:
                     raise UserFacingError(f"Некорректный формат {os.path.basename(path)}, строка {line_number}. Нужен экспорт cookies в формате Netscape с табуляциями.")
+                if value:
+                    secret_values.add(value)
     except (OSError, UnicodeError):
         raise UserFacingError(f"Не удалось прочитать cookie-файл {os.path.basename(path)}.") from None
+    return secret_values
 
 
 # =======================
@@ -556,7 +601,8 @@ def download_with_format(url: str, outtmpl: str, platform: str, format_selector:
             cookie_copy = os.path.join(temp_dir, "cookies.txt")
             shutil.copyfile(ydl_opts["cookiefile"], cookie_copy)
             os.chmod(cookie_copy, 0o600)
-            validate_cookie_file(cookie_copy)
+            secret_values = validate_cookie_file(cookie_copy)
+            ydl_opts["logger"].add_secrets(secret_values)
             ydl_opts["cookiefile"] = cookie_copy
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             if platform == "instagram":
