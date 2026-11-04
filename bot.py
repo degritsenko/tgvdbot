@@ -108,7 +108,10 @@ def safe_error_summary(error) -> str:
         ("rate_limited", 429 in statuses or "too many requests" in text),
         ("cookies_invalid", "cookies are no longer valid" in text or "invalid cookies" in text),
         ("checkpoint_required", "checkpoint" in text or "challenge_required" in text),
-        ("access_restricted", "rate-limit reached or login required" in text),
+        ("access_restricted", any(term in text for term in (
+            "rate-limit reached or login required", "can't be seen by certain audiences",
+            "cannot be seen by certain audiences", "this content isn't available",
+        ))),
         ("login_required", 401 in statuses or any(term in text for term in (
             "you need to log in", "login required", "login_required", "login page", "log in to access",
         ))),
@@ -295,6 +298,22 @@ def is_allowed(user_id: int) -> tuple[bool, Optional[int]]:
 
 def classify_download_error(exc: Exception, platform: str) -> Optional[UserFacingError]:
     message = str(exc)
+    if platform == "instagram":
+        summary = safe_error_summary(exc)
+        if any("category=" + category + " " in summary for category in (
+            "login_required", "cookies_invalid", "checkpoint_required",
+        )):
+            return UserFacingError(
+                "Instagram отклонил авторизацию. Проверь вход и подтверждения в браузере "
+                "и обнови cookies на сервере. Доступ к этому ролику может быть ограничен."
+            )
+        if "category=access_restricted " in summary:
+            return UserFacingError(
+                "Instagram ограничил доступ к ролику. Проверь, открывается ли он "
+                "в аккаунте, из которого экспортированы cookies."
+            )
+        if "category=rate_limited " in summary:
+            return UserFacingError("Instagram временно ограничил запросы. Попробуй позже.")
     if platform == "facebook" and (
         "Cannot parse data" in message
         or "No video formats found" in message
@@ -606,8 +625,9 @@ def download_with_format(url: str, outtmpl: str, platform: str, format_selector:
         )) or "only available for registered users" in str(exc).lower()
         if not needs_auth or not os.path.isfile(INSTAGRAM_COOKIES):
             raise
-        logger.info("Instagram requires authentication; retrying with configured cookies")
-        return _download_with_format(url, outtmpl, platform, format_selector)
+    # Keep the anonymous failure out of the authenticated exception's context.
+    logger.info("Instagram requires authentication; retrying with configured cookies")
+    return _download_with_format(url, outtmpl, platform, format_selector)
 
 
 def _download_with_format(url: str, outtmpl: str, platform: str, format_selector: str, use_cookies: bool = True) -> str:
